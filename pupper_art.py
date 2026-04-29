@@ -59,19 +59,16 @@ def translation(x, y, z):
 # ──────────────────────────────────────────────
 
 def generate_circle(center_x, center_y, z_floor, radius=0.04, n_points=120):
-    """Generate (x, y, z) waypoints for a circle in the floor plane.
-    Y is negated to correct for the RF leg body frame handedness —
-    without this the circle draws as its mirror image on the floor.
-    """
+    """Generate (x, y, z) waypoints for a circle in the floor plane."""
     angles = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
     pts = []
     for a in angles:
         pts.append(np.array([
             center_x + radius * np.cos(a),
-            center_y - radius * np.sin(a),   # negated: corrects frame handedness
+            center_y + radius * np.sin(a),
             z_floor
         ]))
-    pts.append(pts[0])
+    pts.append(pts[0])          # close the shape
     return pts
 
 
@@ -174,17 +171,16 @@ class CascadedPID:
 
 class PupperArt(Node):
 
-    # ── Standing angles for stationary legs (LF, RB, LB) ─────────────────
+    # ── Standing angles for all four legs ─────────────────────────────────
     STAND_ANGLES_LF      = np.array([ 0.00,  0.65, -1.30])
     STAND_ANGLES_RB      = np.array([ 0.00,  0.65, -1.30])
     STAND_ANGLES_LB      = np.array([ 0.00,  0.65, -1.30])
     STAND_ANGLES_RF_HOME = np.array([ 0.00,  0.65, -1.30])  # RF at pen-up home
 
-    # Servo stiffness published immediately on startup and held throughout.
-    # These are the kp/kd gain values sent to forward_kp/kd_controller.
-    # High values = stiff legs that resist gravity and disturbance.
-    SERVO_KP = 8.0
-    SERVO_KD = 0.3
+    # Servo stiffness — ramped from 0 → these values during stand_up phase
+    SERVO_KP      = 8.0   # position gain (higher = stiffer)
+    SERVO_KD      = 0.3   # damping gain  (prevents oscillation)
+    RAMP_UP_SECS  = 4.0   # seconds to ramp from limp to full stiffness
 
     # RF pen tip height while drawing (metres, in body frame, negative = down)
     PEN_Z = -0.14
@@ -212,9 +208,9 @@ class PupperArt(Node):
             JointState, 'joint_states', self._joint_cb, 10)
         self.cmd_pub = self.create_publisher(
             Float64MultiArray, '/forward_command_controller/commands', 10)
-        self.kp_pub = self.create_publisher(
+        self.kp_pub  = self.create_publisher(
             Float64MultiArray, '/forward_kp_controller/commands', 10)
-        self.kd_pub = self.create_publisher(
+        self.kd_pub  = self.create_publisher(
             Float64MultiArray, '/forward_kd_controller/commands', 10)
 
         # ── State ──────────────────────────────────────────────────────────
@@ -224,25 +220,12 @@ class PupperArt(Node):
         # 12-element command array: [RF(3), LF(3), RB(3), LB(3)]
         self.cmd = np.zeros(12)
 
-        # IK-computed target for RF leg — init to RF home, not LF
+        # IK-computed target for RF leg — use RF home, not LF angles
         self.target_rf = np.array(self.STAND_ANGLES_RF_HOME)
 
         # Cascaded PIDs — one per RF joint
         dt_pid = 1.0 / self.CTRL_FREQ
         self.pids = [CascadedPID(dt=dt_pid) for _ in range(3)]
-
-        # Pre-solve RF home so stand phase never calls IK on every tick
-        self._rf_home_angles = self._rf_ik(
-            np.array([self.RF_CENTER_X, self.RF_CENTER_Y, self.PEN_UP_Z]),
-            initial_guess=self.STAND_ANGLES_RF_HOME.tolist()
-        )
-        self.target_rf = self._rf_home_angles.copy()
-
-        # Publish full stiffness immediately — legs are stiff from first tick
-        stiff_kp = Float64MultiArray(data=[self.SERVO_KP] * 12)
-        stiff_kd = Float64MultiArray(data=[self.SERVO_KD] * 12)
-        self.kp_pub.publish(stiff_kp)
-        self.kd_pub.publish(stiff_kd)
 
         # ── Drawing sequence ───────────────────────────────────────────────
         cx, cy = self.RF_CENTER_X, self.RF_CENTER_Y
@@ -258,12 +241,16 @@ class PupperArt(Node):
 
         self.current_shape_idx = 0
         self.current_wp_idx    = 0
-        self.phase             = 'stand'   # stand → pen_down → draw → pen_up → done
+        # stand_up: ramp all 4 legs to standing with increasing kp/kd
+        # stand:    hold for 2 s, confirm stability
+        # pen_down → draw → pen_up → done
+        self.phase             = 'stand_up'
         self.phase_counter     = 0
-        self.STAND_TICKS       = int(2.0 * self.CTRL_FREQ)   # 2 s stand-still
-        self.PEN_DOWN_TICKS    = int(1.0 * self.CTRL_FREQ)   # 1 s lower pen
+        self.RAMP_TICKS        = int(self.RAMP_UP_SECS * self.CTRL_FREQ)
+        self.STAND_TICKS       = int(2.0 * self.CTRL_FREQ)
+        self.PEN_DOWN_TICKS    = int(1.0 * self.CTRL_FREQ)
 
-        self.draw_wp_counter   = 0         # counts ctrl ticks per waypoint hold
+        self.draw_wp_counter   = 0
 
         # ── Timers ─────────────────────────────────────────────────────────
         self.ctrl_timer = self.create_timer(1.0 / self.CTRL_FREQ, self._ctrl_cb)
@@ -363,14 +350,48 @@ class PupperArt(Node):
         # ── State machine ──────────────────────────────────────────────────
         CTRL_PER_WP = max(1, int(self.CTRL_FREQ / self.DRAW_FREQ))
 
-        if self.phase == 'stand':
-            # Use pre-solved home angles — no IK on every tick, no branch-jumping
-            self.target_rf = self._rf_home_angles.copy()
+        if self.phase == 'stand_up':
+            # Ramp kp/kd linearly from 0 → SERVO_KP/KD over RAMP_TICKS.
+            # All 4 legs are commanded to their standing targets the whole time,
+            # so as stiffness increases they pull themselves to the right pose.
+            alpha  = min(1.0, self.phase_counter / self.RAMP_TICKS)
+            kp_now = alpha * self.SERVO_KP
+            kd_now = alpha * self.SERVO_KD
+            self.kp_pub.publish(Float64MultiArray(data=[kp_now] * 12))
+            self.kd_pub.publish(Float64MultiArray(data=[kd_now] * 12))
+
+            stand_cmd = np.concatenate([
+                self.STAND_ANGLES_RF_HOME,
+                self.STAND_ANGLES_LF,
+                self.STAND_ANGLES_RB,
+                self.STAND_ANGLES_LB,
+            ])
+            self.cmd_pub.publish(Float64MultiArray(data=stand_cmd.tolist()))
+
+            self.phase_counter += 1
+            if self.phase_counter >= self.RAMP_TICKS:
+                self.phase = 'stand'
+                self.phase_counter = 0
+                self.get_logger().info('All legs standing — holding 2 s before drawing…')
+            return   # skip PID / publish below during ramp
+
+        elif self.phase == 'stand':
+            # Hold all four legs at standing targets for STAND_TICKS.
+            # kp/kd are already at full value from stand_up phase.
+            self.target_rf = np.array(self.STAND_ANGLES_RF_HOME)
+            stand_cmd = np.concatenate([
+                self.STAND_ANGLES_RF_HOME,
+                self.STAND_ANGLES_LF,
+                self.STAND_ANGLES_RB,
+                self.STAND_ANGLES_LB,
+            ])
+            self.cmd_pub.publish(Float64MultiArray(data=stand_cmd.tolist()))
             self.phase_counter += 1
             if self.phase_counter >= self.STAND_TICKS:
                 self.phase = 'pen_down'
                 self.phase_counter = 0
                 self.get_logger().info('Standing stable — lowering pen…')
+            return   # skip PID / publish below during hold
 
         elif self.phase == 'pen_down':
             # Smoothly lower pen to drawing height
@@ -460,8 +481,7 @@ def main():
     except KeyboardInterrupt:
         node.get_logger().info('Interrupted — sending zero command…')
     finally:
-        zero = Float64MultiArray()
-        zero.data = [0.0] * 12
+        zero = Float64MultiArray(data=[0.0] * 12)
         node.cmd_pub.publish(zero)
         node.kp_pub.publish(zero)
         node.kd_pub.publish(zero)
