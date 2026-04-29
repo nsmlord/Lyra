@@ -385,18 +385,11 @@ class PupperArt(Node):
                 self.phase_counter = 0
 
         elif self.phase == 'done':
-            # Raise pen back to centre, hold briefly, then relax and exit
+            # Raise pen, return to stand centre
             target_rf_ee = np.array([self.RF_CENTER_X,
                                      self.RF_CENTER_Y,
                                      self.PEN_UP_Z])
             self.target_rf = self._rf_ik(target_rf_ee, initial_guess=list(rf_pos))
-            self.phase_counter += 1
-            if self.phase_counter >= int(1.0 * self.CTRL_FREQ):  # hold 1 s then exit
-                self.get_logger().info('Drawing complete — relaxing joints and exiting.')
-                zero = Float64MultiArray()
-                zero.data = [0.0] * 12
-                self.cmd_pub.publish(zero)
-                raise SystemExit
 
         # ── Cascaded PID correction on RF joints ──────────────────────────
         rf_cmd = np.zeros(3)
@@ -442,14 +435,12 @@ def main():
     node = PupperArt()
     try:
         rclpy.spin(node)
-    except (KeyboardInterrupt, SystemExit):
-        pass
+    except KeyboardInterrupt:
+        node.get_logger().info('Interrupted — sending zero command…')
     finally:
-        # Always relax joints on exit — lets you move legs freely afterwards
         zero = Float64MultiArray()
         zero.data = [0.0] * 12
         node.cmd_pub.publish(zero)
-        node.get_logger().info('Joints relaxed — run sample_standing_pose.py to reposition.')
         node.destroy_node()
         rclpy.shutdown()
 
