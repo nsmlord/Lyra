@@ -174,9 +174,16 @@ class PupperArt(Node):
     # ── Standing angles for stationary legs (LF, RB, LB) ─────────────────
     # These keep the body level while the RF leg draws.
     # Obtained by running IK for each leg at its nominal stand position.
-    STAND_ANGLES_LF = np.array([ 0.00,  0.65, -1.30])
-    STAND_ANGLES_RB = np.array([ 0.00,  0.65, -1.30])
-    STAND_ANGLES_LB = np.array([ 0.00,  0.65, -1.30])
+    # Sampled 2026-04-29 — robot in stable standing pose (std dev 0.0002 rad)
+    STAND_ANGLES_LF = np.array([-0.93648, -0.00725, +1.78256])
+    STAND_ANGLES_RB = np.array([+0.92656, +0.01832, -1.75548])
+    STAND_ANGLES_LB = np.array([-0.91741, -0.01183, +1.79858])
+    STAND_ANGLES_RF_HOME = np.array([+0.96814, -0.02174, -1.76501])
+
+    # Servo gains for standing legs
+    STAND_KP = 5.0
+    STAND_KD = 0.1
+    STAND_UP_SECS = 2.0   # seconds to ramp from limp to standing
 
     # RF pen tip height while drawing (metres, in body frame, negative = down)
     PEN_Z = -0.14
@@ -204,6 +211,10 @@ class PupperArt(Node):
             JointState, 'joint_states', self._joint_cb, 10)
         self.cmd_pub = self.create_publisher(
             Float64MultiArray, '/forward_command_controller/commands', 10)
+        self.kp_pub = self.create_publisher(
+            Float64MultiArray, '/forward_kp_controller/commands', 10)
+        self.kd_pub = self.create_publisher(
+            Float64MultiArray, '/forward_kd_controller/commands', 10)
 
         # ── State ──────────────────────────────────────────────────────────
         self.joint_positions  = None
@@ -233,9 +244,10 @@ class PupperArt(Node):
 
         self.current_shape_idx = 0
         self.current_wp_idx    = 0
-        self.phase             = 'stand'   # stand → pen_down → draw → pen_up → done
+        self.phase             = 'stand_up'  # stand_up → stand → pen_down → draw → pen_up → done
         self.phase_counter     = 0
-        self.STAND_TICKS       = int(2.0 * self.CTRL_FREQ)   # 2 s stand-still
+        self.STAND_UP_TICKS    = int(self.STAND_UP_SECS * self.CTRL_FREQ)  # ramp from limp to standing
+        self.STAND_TICKS       = int(2.0 * self.CTRL_FREQ)   # 2 s hold before drawing
         self.PEN_DOWN_TICKS    = int(1.0 * self.CTRL_FREQ)   # 1 s lower pen
 
         self.draw_wp_counter   = 0         # counts ctrl ticks per waypoint hold
@@ -338,7 +350,34 @@ class PupperArt(Node):
         # ── State machine ──────────────────────────────────────────────────
         CTRL_PER_WP = max(1, int(self.CTRL_FREQ / self.DRAW_FREQ))
 
-        if self.phase == 'stand':
+        if self.phase == 'stand_up':
+            # Ramp kp/kd from 0 → STAND_KP/KD over STAND_UP_SECS
+            # This brings the 3 standing legs smoothly to their target angles
+            # without jerking from whatever limp position they're in.
+            alpha = min(1.0, self.phase_counter / self.STAND_UP_TICKS)
+            kp_now = alpha * self.STAND_KP
+            kd_now = alpha * self.STAND_KD
+            kp_msg = Float64MultiArray(data=[kp_now] * 12)
+            kd_msg = Float64MultiArray(data=[kd_now] * 12)
+            self.kp_pub.publish(kp_msg)
+            self.kd_pub.publish(kd_msg)
+            # Also command standing positions so servos move toward them
+            stand_cmd = np.concatenate([
+                self.STAND_ANGLES_RF_HOME,
+                self.STAND_ANGLES_LF,
+                self.STAND_ANGLES_RB,
+                self.STAND_ANGLES_LB,
+            ])
+            msg = Float64MultiArray(data=stand_cmd.tolist())
+            self.cmd_pub.publish(msg)
+            self.phase_counter += 1
+            if self.phase_counter >= self.STAND_UP_TICKS:
+                self.phase = 'stand'
+                self.phase_counter = 0
+                self.get_logger().info('Standing position reached — waiting 2 s before drawing…')
+            return  # skip the rest of _ctrl_cb during stand_up
+
+        elif self.phase == 'stand':
             # Hold standing pose for STAND_TICKS
             target_rf_ee = np.array([self.RF_CENTER_X,
                                      self.RF_CENTER_Y,
@@ -393,9 +432,10 @@ class PupperArt(Node):
             self.phase_counter += 1
             if self.phase_counter >= int(1.0 * self.CTRL_FREQ):  # hold 1 s then exit
                 self.get_logger().info('Drawing complete — relaxing joints and exiting.')
-                zero = Float64MultiArray()
-                zero.data = [0.0] * 12
+                zero = Float64MultiArray(data=[0.0] * 12)
                 self.cmd_pub.publish(zero)
+                self.kp_pub.publish(zero)
+                self.kd_pub.publish(zero)
                 raise SystemExit
 
         # ── Cascaded PID correction on RF joints ──────────────────────────
@@ -446,9 +486,10 @@ def main():
         pass
     finally:
         # Always relax joints on exit — lets you move legs freely afterwards
-        zero = Float64MultiArray()
-        zero.data = [0.0] * 12
+        zero = Float64MultiArray(data=[0.0] * 12)
         node.cmd_pub.publish(zero)
+        node.kp_pub.publish(zero)
+        node.kd_pub.publish(zero)
         node.get_logger().info('Joints relaxed — run sample_standing_pose.py to reposition.')
         node.destroy_node()
         rclpy.shutdown()
