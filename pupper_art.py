@@ -59,13 +59,17 @@ def translation(x, y, z):
 # ──────────────────────────────────────────────
 
 def generate_circle(center_x, center_y, z_floor, radius=0.04, n_points=120):
-    """Generate (x, y, z) waypoints for a circle in the floor plane."""
+    """Generate (x, y, z) waypoints for a circle in the floor plane.
+    Y is negated so the circle draws counter-clockwise when viewed from above
+    in the RF leg body frame (Y axis points inward, so raw sin(a) goes the
+    wrong way and the circle appears mirrored without this correction).
+    """
     angles = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
     pts = []
     for a in angles:
         pts.append(np.array([
             center_x + radius * np.cos(a),
-            center_y + radius * np.sin(a),
+            center_y - radius * np.sin(a),   # negated: corrects frame handedness
             z_floor
         ]))
     pts.append(pts[0])          # close the shape
@@ -183,7 +187,8 @@ class PupperArt(Node):
     # Servo gains for standing legs
     STAND_KP = 5.0
     STAND_KD = 0.1
-    STAND_UP_SECS = 2.0   # seconds to ramp from limp to standing
+    STAND_UP_SECS  = 5.0   # seconds to ramp kp/kd from 0 → full (was 2.0, too fast)
+    SETTLE_SECS    = 1.5   # seconds to wait after first joint state before ramping
 
     # RF pen tip height while drawing (metres, in body frame, negative = down)
     PEN_Z = -0.14
@@ -224,7 +229,7 @@ class PupperArt(Node):
         self.cmd = np.zeros(12)
 
         # IK-computed target for RF leg
-        self.target_rf = np.array(self.STAND_ANGLES_LF)  # init to stand
+        self.target_rf = np.array(self.STAND_ANGLES_RF_HOME)  # init to RF home, not LF
 
         # Cascaded PIDs — one per RF joint
         dt_pid = 1.0 / self.CTRL_FREQ
@@ -247,10 +252,12 @@ class PupperArt(Node):
         self.phase             = 'stand_up'  # stand_up → stand → pen_down → draw → pen_up → done
         self.phase_counter     = 0
         self.STAND_UP_TICKS    = int(self.STAND_UP_SECS * self.CTRL_FREQ)  # ramp from limp to standing
+        self.SETTLE_TICKS      = int(self.SETTLE_SECS  * self.CTRL_FREQ)  # wait before ramp starts
         self.STAND_TICKS       = int(2.0 * self.CTRL_FREQ)   # 2 s hold before drawing
         self.PEN_DOWN_TICKS    = int(1.0 * self.CTRL_FREQ)   # 1 s lower pen
 
         self.draw_wp_counter   = 0         # counts ctrl ticks per waypoint hold
+        self._settle_counter   = 0         # ticks to wait before kp/kd ramp starts
 
         # ── Timers ─────────────────────────────────────────────────────────
         self.ctrl_timer = self.create_timer(1.0 / self.CTRL_FREQ, self._ctrl_cb)
@@ -351,6 +358,17 @@ class PupperArt(Node):
         CTRL_PER_WP = max(1, int(self.CTRL_FREQ / self.DRAW_FREQ))
 
         if self.phase == 'stand_up':
+            # Wait SETTLE_SECS after first joint state before ramping gains.
+            # This gives the launch file's initial state time to take effect
+            # so the legs are not jerked from whatever position they landed in.
+            if self._settle_counter < self.SETTLE_TICKS:
+                self._settle_counter += 1
+                # Send zero gains and current-position command to hold limp
+                zero_gains = Float64MultiArray(data=[0.0] * 12)
+                self.kp_pub.publish(zero_gains)
+                self.kd_pub.publish(zero_gains)
+                return
+
             # Ramp kp/kd from 0 → STAND_KP/KD over STAND_UP_SECS
             # This brings the 3 standing legs smoothly to their target angles
             # without jerking from whatever limp position they're in.
