@@ -173,9 +173,14 @@ class PupperArt(Node):
 
     # ── Standing angles for all four legs ─────────────────────────────────
     # Sampled 2026-04-29 — stable standing pose, std dev 0.0005 rad
-    STAND_ANGLES_LF      = np.array([-0.85790, -0.04502, +1.40795])
-    STAND_ANGLES_RB      = np.array([+0.92542, +0.02251, -1.31258])
-    STAND_ANGLES_LB      = np.array([-0.95441, -0.06753, +1.46021])
+    #STAND_ANGLES_LF      = np.array([-0.85790, -0.04502, +1.40795])
+    #STAND_ANGLES_RB      = np.array([+0.92542, +0.02251, -1.31258])
+    #STAND_ANGLES_LB      = np.array([-0.95441, -0.06753, +1.46021])
+
+    STAND_ANGLES_LF = np.array([-1.74063, -1.48890, +2.51042])
+    STAND_ANGLES_RB = np.array([+1.70058, +2.19578, -2.19112])
+    STAND_ANGLES_LB = np.array([-1.62543, -1.79408, +2.38033])
+
     STAND_ANGLES_RF_HOME = np.array([+0.91855, +0.03014, -1.40109])  # RF at pen-up home
 
     # Servo stiffness — ramped from 0 → these values during stand_up phase
