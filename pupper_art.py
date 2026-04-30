@@ -172,11 +172,10 @@ class CascadedPID:
 class PupperArt(Node):
 
     # ── Standing angles for all four legs ─────────────────────────────────
-    # Sampled from the physical robot in stable standing pose (std dev 0.0002 rad)
-    STAND_ANGLES_LF      = np.array([-0.93648, -0.00725, +1.78256])
-    STAND_ANGLES_RB      = np.array([+0.92656, +0.01832, -1.75548])
-    STAND_ANGLES_LB      = np.array([-0.91741, -0.01183, +1.79858])
-    STAND_ANGLES_RF_HOME = np.array([+0.96814, -0.02174, -1.76501])
+    STAND_ANGLES_LF      = np.array([ 0.00,  0.65, -1.30])
+    STAND_ANGLES_RB      = np.array([ 0.00,  0.65, -1.30])
+    STAND_ANGLES_LB      = np.array([ 0.00,  0.65, -1.30])
+    STAND_ANGLES_RF_HOME = np.array([ 0.00,  0.65, -1.30])  # RF at pen-up home
 
     # Servo stiffness — ramped from 0 → these values during stand_up phase
     SERVO_KP      = 8.0   # position gain (higher = stiffer)
