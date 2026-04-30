@@ -172,15 +172,16 @@ class CascadedPID:
 class PupperArt(Node):
 
     # ── Standing angles for all four legs ─────────────────────────────────
-    STAND_ANGLES_LF      = np.array([ 0.00,  0.65, -1.30])
-    STAND_ANGLES_RB      = np.array([ 0.00,  0.65, -1.30])
-    STAND_ANGLES_LB      = np.array([ 0.00,  0.65, -1.30])
-    STAND_ANGLES_RF_HOME = np.array([ 0.00,  0.65, -1.30])  # RF at pen-up home
+    # Sampled 2026-04-29 — stable standing pose, std dev 0.0005 rad
+    STAND_ANGLES_LF      = np.array([-0.85790, -0.04502, +1.40795])
+    STAND_ANGLES_RB      = np.array([+0.92542, +0.02251, -1.31258])
+    STAND_ANGLES_LB      = np.array([-0.95441, -0.06753, +1.46021])
+    STAND_ANGLES_RF_HOME = np.array([+0.91855, +0.03014, -1.40109])  # RF at pen-up home
 
     # Servo stiffness — ramped from 0 → these values during stand_up phase
-    SERVO_KP      = 8.0   # position gain (higher = stiffer)
-    SERVO_KD      = 0.3   # damping gain  (prevents oscillation)
-    RAMP_UP_SECS  = 4.0   # seconds to ramp from limp to full stiffness
+    SERVO_KP      = 4.0   # position gain — enough to stand, not so much it snaps
+    SERVO_KD      = 0.2   # damping gain
+    RAMP_UP_SECS  = 3.0   # seconds to ramp from limp to full stiffness
 
     # RF pen tip height while drawing (metres, in body frame, negative = down)
     PEN_Z = -0.14
@@ -428,11 +429,19 @@ class PupperArt(Node):
                 self.phase_counter = 0
 
         elif self.phase == 'done':
-            # Raise pen, return to stand centre
+            # Raise pen back to centre, hold 1 s, then relax and exit
             target_rf_ee = np.array([self.RF_CENTER_X,
                                      self.RF_CENTER_Y,
                                      self.PEN_UP_Z])
             self.target_rf = self._rf_ik(target_rf_ee, initial_guess=list(rf_pos))
+            self.phase_counter += 1
+            if self.phase_counter >= int(1.0 * self.CTRL_FREQ):
+                self.get_logger().info('Drawing complete — relaxing and exiting.')
+                zero = Float64MultiArray(data=[0.0] * 12)
+                self.cmd_pub.publish(zero)
+                self.kp_pub.publish(zero)
+                self.kd_pub.publish(zero)
+                raise SystemExit
 
         # ── Cascaded PID correction on RF joints ──────────────────────────
         rf_cmd = np.zeros(3)
@@ -478,8 +487,8 @@ def main():
     node = PupperArt()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        node.get_logger().info('Interrupted — sending zero command…')
+    except (KeyboardInterrupt, SystemExit):
+        pass
     finally:
         zero = Float64MultiArray(data=[0.0] * 12)
         node.cmd_pub.publish(zero)
