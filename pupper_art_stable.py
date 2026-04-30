@@ -26,9 +26,7 @@ The node draws the circle first, pauses, then draws the star.
 """
 
 import sys
-import termios
 import threading
-import tty
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
@@ -280,8 +278,6 @@ class PupperArt(Node):
         self.ctrl_timer = self.create_timer(1.0 / self.CTRL_FREQ, self._ctrl_cb)
 
         # ── Keypress thread ────────────────────────────────────────────────
-        self._term_fd = sys.stdin.fileno()
-        self._term_normal = termios.tcgetattr(self._term_fd)
         self._key_thread = threading.Thread(target=self._key_loop, daemon=True)
         self._key_thread.start()
 
@@ -296,43 +292,28 @@ class PupperArt(Node):
     # Keypress input
     # ──────────────────────────────────────────────────────────────────────
 
-    def _getch(self):
-        old = termios.tcgetattr(self._term_fd)
-        try:
-            tty.setraw(self._term_fd)
-            return sys.stdin.read(1)
-        finally:
-            termios.tcsetattr(self._term_fd, termios.TCSADRAIN, old)
-
-    def _restore_terminal(self):
-        try:
-            termios.tcsetattr(self._term_fd, termios.TCSADRAIN, self._term_normal)
-        except Exception:
-            pass
-
     def _key_loop(self):
         print('\nControls:  s = stand   d = draw   q = relax + quit\n', flush=True)
         while rclpy.ok():
-            key = self._getch()
-            termios.tcsetattr(self._term_fd, termios.TCSADRAIN, self._term_normal)
+            key = input().strip().lower()
             if key == 's':
                 if self.phase == 'idle':
                     self.phase = 'stand_up'
                     self.phase_counter = 0
-                    print('\r[STANDING UP]                                    ', flush=True)
+                    print('[STANDING UP]', flush=True)
                 else:
-                    print('\r[already standing or drawing — press d to draw]  ', flush=True)
+                    print('[already standing or drawing — press d to draw]', flush=True)
             elif key == 'd':
                 if self.phase == 'standing_hold':
                     self.phase = 'pen_down'
                     self.phase_counter = 0
-                    print('\r[DRAWING]                                        ', flush=True)
+                    print('[DRAWING]', flush=True)
                 elif self.phase == 'idle':
-                    print('\r[press s to stand first]                         ', flush=True)
+                    print('[press s to stand first]', flush=True)
                 else:
-                    print(f'\r[not ready to draw yet — phase: {self.phase}]   ', flush=True)
-            elif key in ('q', '\x03'):
-                print('\r[RELAXING AND QUITTING]                          ', flush=True)
+                    print(f'[not ready to draw yet — phase: {self.phase}]', flush=True)
+            elif key == 'q':
+                print('[RELAXING AND QUITTING]', flush=True)
                 self.phase = 'relax_quit'
 
     # ──────────────────────────────────────────────────────────────────────
@@ -536,8 +517,7 @@ class PupperArt(Node):
             self.cmd_pub.publish(zero)
             self.kp_pub.publish(zero)
             self.kd_pub.publish(zero)
-            self._restore_terminal()
-            raise SystemExit
+            sys.exit(0)
 
         # ── Cascaded PID correction on RF joints ──────────────────────────
         rf_cmd = np.zeros(3)
@@ -583,12 +563,9 @@ def main():
     node = PupperArt()
     try:
         rclpy.spin(node)
-    except SystemExit:
-        pass
-    except KeyboardInterrupt:
+    except (SystemExit, KeyboardInterrupt):
         pass
     finally:
-        node._restore_terminal()
         node.destroy_node()
         rclpy.shutdown()
 
