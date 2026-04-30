@@ -195,10 +195,9 @@ class PupperArt(Node):
     #STAND_ANGLES_RB      = np.array([+0.92542, +0.02251, -1.31258])
     #STAND_ANGLES_LB      = np.array([-0.95441, -0.06753, +1.46021])
 
-    STAND_ANGLES_LF = np.array([-0.92542, +0.05188, +1.75700])
-    STAND_ANGLES_RB = np.array([+0.66373, +0.02060, -0.94866])
-    STAND_ANGLES_LB = np.array([-0.69424, +0.01297, +1.02228])
-
+    STAND_ANGLES_LF = np.array([-0.89109, +0.03204, +1.18250])
+    STAND_ANGLES_RB = np.array([+0.91054, +0.02518, -1.73602])
+    STAND_ANGLES_LB = np.array([-0.90711, +0.07209, +1.85275])
 
     STAND_ANGLES_RF_HOME = np.array([+0.91855, +0.03014, -1.40109])  # RF at pen-up home
 
@@ -281,6 +280,8 @@ class PupperArt(Node):
         self.ctrl_timer = self.create_timer(1.0 / self.CTRL_FREQ, self._ctrl_cb)
 
         # ── Keypress thread ────────────────────────────────────────────────
+        self._term_fd = sys.stdin.fileno()
+        self._term_normal = termios.tcgetattr(self._term_fd)
         self._key_thread = threading.Thread(target=self._key_loop, daemon=True)
         self._key_thread.start()
 
@@ -295,24 +296,17 @@ class PupperArt(Node):
     # Keypress input
     # ──────────────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _getch():
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
+    def _getch(self):
+        old = termios.tcgetattr(self._term_fd)
         try:
-            tty.setraw(fd)
+            tty.setraw(self._term_fd)
             return sys.stdin.read(1)
         finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            termios.tcsetattr(self._term_fd, termios.TCSADRAIN, old)
 
-    @staticmethod
-    def _restore_terminal():
-        """Reset terminal to sane state — call before any exit path."""
-        fd = sys.stdin.fileno()
+    def _restore_terminal(self):
         try:
-            old = termios.tcgetattr(fd)
-            old[3] |= termios.ECHO | termios.ICANON
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            termios.tcsetattr(self._term_fd, termios.TCSADRAIN, self._term_normal)
         except Exception:
             pass
 
@@ -320,6 +314,7 @@ class PupperArt(Node):
         print('\nControls:  s = stand   d = draw   q = relax + quit\n', flush=True)
         while rclpy.ok():
             key = self._getch()
+            termios.tcsetattr(self._term_fd, termios.TCSADRAIN, self._term_normal)
             if key == 's':
                 if self.phase == 'idle':
                     self.phase = 'stand_up'
