@@ -11,7 +11,7 @@ from launch.substitutions import Command, FindExecutable, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-LYRA_DIR = '/home/pi/Lyra/v2'   # adjust if needed
+LYRA_DIR = '/home/pi/Lyra'   # adjust if needed
 
 def generate_launch_description():
     robot_description_content = Command([
