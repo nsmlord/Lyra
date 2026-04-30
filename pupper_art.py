@@ -25,6 +25,10 @@ Shapes supported: circle, star (5-pointed)
 The node draws the circle first, pauses, then draws the star.
 """
 
+import sys
+import termios
+import threading
+import tty
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
@@ -263,8 +267,8 @@ class PupperArt(Node):
         self.current_wp_idx    = 0
         # stand_up: ramp all 4 legs to standing with increasing kp/kd
         # stand:    hold for 2 s, confirm stability
-        # pen_down → draw → pen_up → done
-        self.phase             = 'stand_up'
+        # pen_down → draw → pen_up → done → standing_hold (until q)
+        self.phase             = 'idle'   # waits for 's' keypress
         self.phase_counter     = 0
         self.RAMP_TICKS        = int(self.RAMP_UP_SECS * self.CTRL_FREQ)
         self.STAND_TICKS       = int(2.0 * self.CTRL_FREQ)
@@ -275,7 +279,54 @@ class PupperArt(Node):
         # ── Timers ─────────────────────────────────────────────────────────
         self.ctrl_timer = self.create_timer(1.0 / self.CTRL_FREQ, self._ctrl_cb)
 
-        self.get_logger().info('PupperArt node started — waiting for joint states …')
+        # ── Keypress thread ────────────────────────────────────────────────
+        self._key_thread = threading.Thread(target=self._key_loop, daemon=True)
+        self._key_thread.start()
+
+        self.get_logger().info(
+            'PupperArt ready.\n'
+            '  s = stand up\n'
+            '  d = start drawing  (only after standing)\n'
+            '  q = relax and quit\n'
+        )
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Keypress input
+    # ──────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _getch():
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            return sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    def _key_loop(self):
+        print('\nControls:  s = stand   d = draw   q = relax + quit\n', flush=True)
+        while rclpy.ok():
+            key = self._getch()
+            if key == 's':
+                if self.phase == 'idle':
+                    self.phase = 'stand_up'
+                    self.phase_counter = 0
+                    print('\r[STANDING UP]                                    ', flush=True)
+                else:
+                    print('\r[already standing or drawing — press d to draw]  ', flush=True)
+            elif key == 'd':
+                if self.phase == 'standing_hold':
+                    self.phase = 'pen_down'
+                    self.phase_counter = 0
+                    print('\r[DRAWING]                                        ', flush=True)
+                elif self.phase == 'idle':
+                    print('\r[press s to stand first]                         ', flush=True)
+                else:
+                    print(f'\r[not ready to draw yet — phase: {self.phase}]   ', flush=True)
+            elif key in ('q', '\x03'):
+                print('\r[RELAXING AND QUITTING]                          ', flush=True)
+                self.phase = 'relax_quit'
 
     # ──────────────────────────────────────────────────────────────────────
     # Forward kinematics (RF leg only)
@@ -370,7 +421,10 @@ class PupperArt(Node):
         # ── State machine ──────────────────────────────────────────────────
         CTRL_PER_WP = max(1, int(self.CTRL_FREQ / self.DRAW_FREQ))
 
-        if self.phase == 'stand_up':
+        if self.phase == 'idle':
+            return   # waiting for 's'
+
+        elif self.phase == 'stand_up':
             # Ramp kp/kd linearly from 0 → SERVO_KP/KD over RAMP_TICKS.
             # All 4 legs are commanded to their standing targets the whole time,
             # so as stiffness increases they pull themselves to the right pose.
@@ -408,10 +462,21 @@ class PupperArt(Node):
             self.cmd_pub.publish(Float64MultiArray(data=stand_cmd.tolist()))
             self.phase_counter += 1
             if self.phase_counter >= self.STAND_TICKS:
-                self.phase = 'pen_down'
+                self.phase = 'standing_hold'
                 self.phase_counter = 0
-                self.get_logger().info('Standing stable — lowering pen…')
+                self.get_logger().info('Standing stable — press d to start drawing.')
             return   # skip PID / publish below during hold
+
+        elif self.phase == 'standing_hold':
+            # Hold standing pose indefinitely; waiting for 'd' or 'q'
+            stand_cmd = np.concatenate([
+                self.STAND_ANGLES_RF_HOME,
+                self.STAND_ANGLES_LF,
+                self.STAND_ANGLES_RB,
+                self.STAND_ANGLES_LB,
+            ])
+            self.cmd_pub.publish(Float64MultiArray(data=stand_cmd.tolist()))
+            return
 
         elif self.phase == 'pen_down':
             # Smoothly lower pen to drawing height
@@ -448,19 +513,24 @@ class PupperArt(Node):
                 self.phase_counter = 0
 
         elif self.phase == 'done':
-            # Raise pen back to centre, hold 1 s, then relax and exit
+            # Raise pen back to home, hold briefly, then return to standing_hold
             target_rf_ee = np.array([self.RF_CENTER_X,
                                      self.RF_CENTER_Y,
                                      self.PEN_UP_Z])
             self.target_rf = self._rf_ik(target_rf_ee, initial_guess=list(rf_pos))
             self.phase_counter += 1
             if self.phase_counter >= int(1.0 * self.CTRL_FREQ):
-                self.get_logger().info('Drawing complete — relaxing and exiting.')
-                zero = Float64MultiArray(data=[0.0] * 12)
-                self.cmd_pub.publish(zero)
-                self.kp_pub.publish(zero)
-                self.kd_pub.publish(zero)
-                raise SystemExit
+                self.get_logger().info('Drawing complete — standing by. Press q to quit.')
+                self.phase = 'standing_hold'
+                self.phase_counter = 0
+
+        elif self.phase == 'relax_quit':
+            # Zero all gains and exit
+            zero = Float64MultiArray(data=[0.0] * 12)
+            self.cmd_pub.publish(zero)
+            self.kp_pub.publish(zero)
+            self.kd_pub.publish(zero)
+            raise SystemExit
 
         # ── Cascaded PID correction on RF joints ──────────────────────────
         rf_cmd = np.zeros(3)
@@ -506,13 +576,11 @@ def main():
     node = PupperArt()
     try:
         rclpy.spin(node)
-    except (KeyboardInterrupt, SystemExit):
-        pass
+    except SystemExit:
+        pass   # relax_quit phase already published zeros
+    except KeyboardInterrupt:
+        pass   # leave gains as-is so robot stays standing
     finally:
-        zero = Float64MultiArray(data=[0.0] * 12)
-        node.cmd_pub.publish(zero)
-        node.kp_pub.publish(zero)
-        node.kd_pub.publish(zero)
         node.destroy_node()
         rclpy.shutdown()
 
