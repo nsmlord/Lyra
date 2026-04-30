@@ -5,7 +5,9 @@ set_gains.py
 Interactive gain controller for Pupper. Runs indefinitely in one terminal.
 
     r      →  relax   (kp=0, kd=0)    go limp so you can manually pose the legs
-    s      →  stiffen (kp=5, kd=0.1)  lock joints at wherever they currently are
+    s      →  stiffen                  read current joint positions, latch them
+                                       as the position command, THEN raise gains
+                                       so the robot holds exactly where you left it
     Enter  →  log current joint positions to stdout
     q      →  quit
 
@@ -32,10 +34,8 @@ JOINTS = [
 ]
 N = len(JOINTS)
 
-PRESETS = {
-    'relax':   {'kp': 0.0, 'kd': 0.0},
-    'stiffen': {'kp': 5.0, 'kd': 0.1},
-}
+KP_STIFF = 5.0
+KD_STIFF = 0.1
 
 
 def getch():
@@ -57,12 +57,13 @@ class GainPublisher(Node):
             Float64MultiArray, '/forward_kp_controller/commands', 10)
         self.kd_pub = self.create_publisher(
             Float64MultiArray, '/forward_kd_controller/commands', 10)
+        self.pos_pub = self.create_publisher(
+            Float64MultiArray, '/forward_command_controller/commands', 10)
 
         self._kp = 0.0
         self._kd = 0.0
-        self._lock = threading.Lock()
+        self._gain_lock = threading.Lock()
 
-        # Latest joint state received from the broadcaster
         self._joint_positions: dict[str, float] = {}
         self._js_lock = threading.Lock()
 
@@ -71,37 +72,64 @@ class GainPublisher(Node):
 
         self.create_timer(0.02, self._publish)  # 50 Hz
 
-    # ── gains ──────────────────────────────────────────────────────────────
-
-    def set_gains(self, kp: float, kd: float):
-        with self._lock:
-            self._kp = kp
-            self._kd = kd
-
-    def _publish(self):
-        with self._lock:
-            kp, kd = self._kp, self._kd
-        self.kp_pub.publish(Float64MultiArray(data=[kp] * N))
-        self.kd_pub.publish(Float64MultiArray(data=[kd] * N))
-
-    # ── joint states ───────────────────────────────────────────────────────
+    # ── joint state subscription ───────────────────────────────────────────
 
     def _js_callback(self, msg: JointState):
         with self._js_lock:
             for name, pos in zip(msg.name, msg.position):
                 self._joint_positions[name] = pos
 
-    def log_joint_states(self):
+    def _current_positions(self) -> list[float] | None:
         with self._js_lock:
             snapshot = dict(self._joint_positions)
+        if not all(j in snapshot for j in JOINTS):
+            return None
+        return [snapshot[j] for j in JOINTS]
 
-        if not snapshot:
+    # ── gain control ───────────────────────────────────────────────────────
+
+    def relax(self):
+        with self._gain_lock:
+            self._kp = 0.0
+            self._kd = 0.0
+
+    def stiffen(self) -> bool:
+        """
+        Latch current measured positions as the position setpoint,
+        then raise gains. Returns False if joint states aren't available yet.
+        """
+        positions = self._current_positions()
+        if positions is None:
+            return False
+
+        # 1. Send the position command FIRST while gains are still zero
+        self.pos_pub.publish(Float64MultiArray(data=positions))
+
+        # 2. Small sleep so the position command lands before gains go up
+        import time; time.sleep(0.05)
+
+        # 3. Now raise gains — controller targets the pose we just sent
+        with self._gain_lock:
+            self._kp = KP_STIFF
+            self._kd = KD_STIFF
+
+        return True
+
+    def _publish(self):
+        with self._gain_lock:
+            kp, kd = self._kp, self._kd
+        self.kp_pub.publish(Float64MultiArray(data=[kp] * N))
+        self.kd_pub.publish(Float64MultiArray(data=[kd] * N))
+
+    # ── logging ────────────────────────────────────────────────────────────
+
+    def log_joint_states(self):
+        positions = self._current_positions()
+        if positions is None:
             print('\r[LOG] No joint state data yet — is joint_state_broadcaster running?')
             return
-
         print('\r\n--- joint positions ---')
-        for joint in JOINTS:
-            val = snapshot.get(joint, float('nan'))
+        for joint, val in zip(JOINTS, positions):
             print(f'  {joint:<22} {val:+.4f} rad')
         print('-----------------------\n', flush=True)
 
@@ -112,18 +140,21 @@ def input_loop(node: GainPublisher):
         key = getch()
 
         if key == 'r':
-            node.set_gains(**PRESETS['relax'])
-            print('\r[RELAX]   kp=0.0, kd=0.0  — move legs freely          ', flush=True)
+            node.relax()
+            print('\r[RELAX]   kp=0.0, kd=0.0  — move legs freely               ', flush=True)
 
         elif key == 's':
-            node.set_gains(**PRESETS['stiffen'])
-            print('\r[STIFFEN] kp=5.0, kd=0.1  — holding current position  ', flush=True)
+            ok = node.stiffen()
+            if ok:
+                print(f'\r[STIFFEN] kp={KP_STIFF}, kd={KD_STIFF}  — holding current position  ', flush=True)
+            else:
+                print('\r[STIFFEN] failed — no joint state data yet, try again     ', flush=True)
 
-        elif key in ('\r', '\n'):   # Enter
+        elif key in ('\r', '\n'):
             node.log_joint_states()
 
-        elif key in ('q', '\x03'):  # q or Ctrl+C
-            print('\rQuitting...                                            ')
+        elif key in ('q', '\x03'):
+            print('\rQuitting...                                                  ')
             rclpy.shutdown()
             break
 
