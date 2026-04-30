@@ -76,13 +76,33 @@ def generate_circle(cx, cy, z, radius=0.035, n=120):
     pts.append(pts[0])
     return pts
 
-def generate_star(cx, cy, z, r_outer=0.05, r_inner=0.02, n_points=5):
-    pts = []
-    for i in range(2 * n_points + 1):
+def generate_star(cx, cy, z, r_outer=0.05, r_inner=0.02, n_points=5, n_total=120):
+    """
+    Generate a dense star path by interpolating along each edge between
+    alternating outer (tip) and inner (valley) vertices.
+    n_total: approximate total number of points (distributed evenly across edges).
+    """
+    # Build the sparse corner vertices (outer tip, inner valley, ...)
+    corners = []
+    for i in range(2 * n_points):
         r = r_outer if (i % 2 == 0) else r_inner
         a = np.pi / 2 + i * np.pi / n_points
-        pts.append(np.array([cx + r * np.cos(a), cy + r * np.sin(a), z]))
+        corners.append(np.array([cx + r * np.cos(a), cy + r * np.sin(a), z]))
+ 
+    n_edges = len(corners)  # = 2 * n_points = 10
+    pts_per_edge = max(2, n_total // n_edges)
+ 
+    pts = []
+    for i in range(n_edges):
+        start = corners[i]
+        end   = corners[(i + 1) % n_edges]
+        # linspace from start→end, endpoint=False avoids duplicating the corner
+        for t in np.linspace(0, 1, pts_per_edge, endpoint=False):
+            pts.append(start + t * (end - start))
+ 
+    pts.append(pts[0])  # close the path
     return pts
+
 
 
 # ──────────────────────────────────────────────
