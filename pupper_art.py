@@ -195,9 +195,10 @@ class PupperArt(Node):
     #STAND_ANGLES_RB      = np.array([+0.92542, +0.02251, -1.31258])
     #STAND_ANGLES_LB      = np.array([-0.95441, -0.06753, +1.46021])
 
-    STAND_ANGLES_LF = np.array([-0.89109, +0.03204, +1.18250])
-    STAND_ANGLES_RB = np.array([+0.91054, +0.02518, -1.73602])
-    STAND_ANGLES_LB = np.array([-0.90711, +0.07209, +1.85275])
+    STAND_ANGLES_LF = np.array([-1.34847, +0.03776, +2.27047])
+    STAND_ANGLES_RB = np.array([+0.95937, +0.23309, -1.03716])
+    STAND_ANGLES_LB = np.array([-0.87277, -0.20142, +0.84184])
+
 
     STAND_ANGLES_RF_HOME = np.array([+0.91855, +0.03014, -1.40109])  # RF at pen-up home
 
