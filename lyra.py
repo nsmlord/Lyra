@@ -33,9 +33,96 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 import numpy as np
 import scipy.optimize
+import matplotlib
+import importlib
+import os
+
+# ──────────────────────────────────────────────
+# Matplotlib backend selection
+# ──────────────────────────────────────────────
+# On a Raspberry Pi:
+#   TkAgg  — best choice; needs:  sudo apt install python3-tk
+#   Qt5Agg — needs X11/Wayland ($DISPLAY).  Over plain SSH it crashes
+#             unless QT_QPA_PLATFORM=eglfs (direct HDMI framebuffer).
+#   Agg    — non-interactive fallback; saves plots to file only.
+#
+# IMPORTANT: do NOT import matplotlib.pyplot inside _try_backend.
+# Importing pyplot locks the GUI framework ("headless" if no display has
+# been initialised yet).  If Qt5Agg is locked in as headless during the
+# probe it will crash with "Cannot load backend Qt5Agg … headless is
+# currently running" when the main thread later calls plt.subplots().
+# We only call matplotlib.use() here; pyplot is imported once below,
+# after the backend is chosen, on the main thread.
+
+def _try_backend(name):
+    """Check if a backend module exists and call matplotlib.use(). No pyplot."""
+    try:
+        importlib.import_module(f"matplotlib.backends.backend_{name.lower()}")
+        matplotlib.use(name)
+        print(f"[INFO] Matplotlib backend selected: {name}", flush=True)
+        return True
+    except ImportError as e:
+        print(f"[DEBUG] Backend {name} unavailable: {e}", flush=True)
+        return False
+    except Exception as e:
+        print(f"[DEBUG] Backend {name} error: {e}", flush=True)
+        return False
+
+def _select_backend():
+    forced = os.environ.get("MPLBACKEND", "")
+    if forced:
+        matplotlib.use(forced)
+        print(f"[INFO] MPLBACKEND override: {forced}", flush=True)
+        return forced
+    # 1. TkAgg — works on Pi with HDMI; no display server needed.
+    #    Install with:  sudo apt install python3-tk
+    if _try_backend("TkAgg"):
+        return "TkAgg"
+    # 2. Qt5Agg — if no display server, try eglfs (direct framebuffer).
+    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        os.environ.setdefault("QT_QPA_PLATFORM", "eglfs")
+        print("[INFO] No $DISPLAY — setting QT_QPA_PLATFORM=eglfs", flush=True)
+    if _try_backend("Qt5Agg"):
+        return "Qt5Agg"
+    # 3. Non-interactive fallback.
+    matplotlib.use("Agg")
+    print(
+        "[WARNING] No interactive matplotlib backend available.\n"
+        "  The drawing window will not appear.\n"
+        "  Fix:  sudo apt install python3-tk   (then restart)", flush=True
+    )
+    return "Agg"
+
+_active_backend = _select_backend()
+
+# Import pyplot ONCE here on the main thread, after the backend is chosen.
+# Never import it inside threads or inside _try_backend — doing so locks the
+# GUI framework to "headless" and causes Qt5Agg to crash later.
 import matplotlib.pyplot as plt
 
 np.set_printoptions(precision=4, suppress=True)
+
+# ══════════════════════════════════════════════
+# Global shape / drawing parameters
+# Edit these to change circle and star geometry.
+# ══════════════════════════════════════════════
+
+# Circle
+CIRCLE_RADIUS      = 0.01   # m — radius of drawn circle
+CIRCLE_N_POINTS    = 150    # waypoints per loop
+CIRCLE_LOOP_FACTOR = 1.5    # number of loops
+
+# Star (5-pointed)
+STAR_R_OUTER       = 0.03   # m — tip-to-centre radius
+STAR_R_INNER       = 0.01   # m — valley-to-centre radius
+STAR_N_POINTS      = 5      # number of star tips
+STAR_N_TOTAL       = 120    # total interpolated waypoints per loop
+STAR_LOOP_FACTOR   = 1.5    # number of loops
+
+# Custom-path drawing window
+CUSTOM_WORKSPACE_RADIUS = max(STAR_R_OUTER * 1.5, 0.04)  # m — boundary circle
+CUSTOM_N_INTERP    = 200    # waypoints to interpolate drawn path to
+
 
 # ──────────────────────────────────────────────
 # Homogeneous transform helpers
@@ -61,8 +148,11 @@ def translation(x, y, z):
 # Shape generators
 # ──────────────────────────────────────────────
 
-def generate_circle(center_x, center_y, z_floor, radius=0.01, n_points=120, loop_factor=1.5):
+def generate_circle(center_x, center_y, z_floor, radius=None, n_points=None, loop_factor=None):
     """Generate (x, y, z) waypoints for a circle in the floor plane, with loop_factor loops."""
+    if radius      is None: radius      = CIRCLE_RADIUS
+    if n_points    is None: n_points    = CIRCLE_N_POINTS
+    if loop_factor is None: loop_factor = CIRCLE_LOOP_FACTOR
     angles = np.linspace(0, loop_factor * 2 * np.pi, int(loop_factor * n_points), endpoint=False)
     pts = []
     for a in angles:
@@ -74,13 +164,18 @@ def generate_circle(center_x, center_y, z_floor, radius=0.01, n_points=120, loop
     return pts
 
 
-def generate_star(cx, cy, z, r_outer=0.02, r_inner=0.005, n_points=5, n_total=120, loop_factor=1.5):
+def generate_star(cx, cy, z, r_outer=None, r_inner=None, n_points=None, n_total=None, loop_factor=None):
     """
     Generate a dense star path by interpolating along each edge between
     alternating outer (tip) and inner (valley) vertices.
     n_total: approximate total number of points (distributed evenly across edges).
     loop_factor: number of times to loop through the star.
     """
+    if r_outer     is None: r_outer     = STAR_R_OUTER
+    if r_inner     is None: r_inner     = STAR_R_INNER
+    if n_points    is None: n_points    = STAR_N_POINTS
+    if n_total     is None: n_total     = STAR_N_TOTAL
+    if loop_factor is None: loop_factor = STAR_LOOP_FACTOR
     # Build the sparse corner vertices (outer tip, inner valley, ...)
     corners = []
     for i in range(2 * n_points):
@@ -363,11 +458,7 @@ class PupperArt(Node):
     RF_CENTER_X =  0.06
     RF_CENTER_Y = -0.09
 
-    # Drawing parameters
-    CIRCLE_RADIUS   = 0.01   # m
-    STAR_R_OUTER    = 0.03   # m
-    STAR_R_INNER    = 0.01   # m
-    N_CIRCLE_PTS    = 150
+    # Drawing frequency parameters
     DRAW_FREQ       = 50.0    # Hz  (waypoint advance rate)
     CTRL_FREQ       = 200.0   # Hz  (PD / publish rate)
 
@@ -417,6 +508,9 @@ class PupperArt(Node):
 
         self.draw_wp_counter   = 0
 
+        # ── Custom-path drawing request (set by key thread, handled on main) ─
+        self._custom_path_request = threading.Event()
+
         # ── Timers ─────────────────────────────────────────────────────────
         self.ctrl_timer = self.create_timer(1.0 / self.CTRL_FREQ, self._ctrl_cb)
 
@@ -436,13 +530,9 @@ class PupperArt(Node):
     def _start_drawing(self, shape_name, custom_waypoints=None):
         cx, cy = self.RF_CENTER_X, self.RF_CENTER_Y
         if shape_name == 'circle':
-            self.current_shape = generate_circle(cx, cy, self.PEN_Z,
-                                                 radius=self.CIRCLE_RADIUS,
-                                                 n_points=self.N_CIRCLE_PTS)
+            self.current_shape = generate_circle(cx, cy, self.PEN_Z)
         elif shape_name == 'star':
-            self.current_shape = generate_star(cx, cy, self.PEN_Z,
-                                               r_outer=self.STAR_R_OUTER,
-                                               r_inner=self.STAR_R_INNER)
+            self.current_shape = generate_star(cx, cy, self.PEN_Z)
         elif shape_name == 'custom':
             if custom_waypoints is None or len(custom_waypoints) < 2:
                 print('[custom] No valid waypoints — aborting.', flush=True)
@@ -490,17 +580,10 @@ class PupperArt(Node):
                         '  The dashed circle shows the RF leg workspace boundary.',
                         flush=True
                     )
-                    waypoints = capture_custom_path(
-                        center_x=self.RF_CENTER_X,
-                        center_y=self.RF_CENTER_Y,
-                        z_floor=self.PEN_Z,
-                        workspace_radius=max(self.STAR_R_OUTER * 1.5, 0.04),
-                        n_interp=200,
-                    )
-                    if waypoints is not None:
-                        self._start_drawing('custom', custom_waypoints=waypoints)
-                    else:
-                        print('[custom path cancelled — still in standing_hold]', flush=True)
+                    # Signal the main thread to open the window.
+                    # plt.show(block=True) must run on the main thread — calling
+                    # it from here causes it to return immediately on Qt/Tk backends.
+                    self._custom_path_request.set()
                 elif self.phase == 'idle':
                     print('[press s to stand first]', flush=True)
                 else:
@@ -805,8 +888,34 @@ class PupperArt(Node):
 def main():
     rclpy.init()
     node = PupperArt()
+
+    if matplotlib.get_backend() == 'Agg':
+        print(
+            '[WARNING] Non-interactive backend — drawing window will not appear.\n'
+            '  Fix:  sudo apt install python3-tk   (then restart)', flush=True
+        )
+
     try:
-        rclpy.spin(node)
+        # Non-blocking spin so we can service matplotlib on the main thread.
+        # plt.show(block=True) must be called from the main thread or it returns
+        # immediately on Qt/Tk backends before the user can draw anything.
+        executor = rclpy.executors.SingleThreadedExecutor()
+        executor.add_node(node)
+        while rclpy.ok():
+            executor.spin_once(timeout_sec=0.05)
+            if node._custom_path_request.is_set():
+                node._custom_path_request.clear()
+                waypoints = capture_custom_path(
+                    center_x=node.RF_CENTER_X,
+                    center_y=node.RF_CENTER_Y,
+                    z_floor=node.PEN_Z,
+                    workspace_radius=CUSTOM_WORKSPACE_RADIUS,
+                    n_interp=CUSTOM_N_INTERP,
+                )
+                if waypoints is not None:
+                    node._start_drawing('custom', custom_waypoints=waypoints)
+                else:
+                    print('[custom path cancelled — still in standing_hold]', flush=True)
     except (SystemExit, KeyboardInterrupt):
         pass
     finally:
