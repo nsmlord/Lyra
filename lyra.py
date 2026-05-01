@@ -33,6 +33,7 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 import numpy as np
 import scipy.optimize
+import matplotlib.pyplot as plt
 
 np.set_printoptions(precision=4, suppress=True)
 
@@ -60,9 +61,9 @@ def translation(x, y, z):
 # Shape generators
 # ──────────────────────────────────────────────
 
-def generate_circle(center_x, center_y, z_floor, radius=0.04, n_points=120):
-    """Generate (x, y, z) waypoints for a circle in the floor plane."""
-    angles = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
+def generate_circle(center_x, center_y, z_floor, radius=0.01, n_points=120, loop_factor=1.5):
+    """Generate (x, y, z) waypoints for a circle in the floor plane, with loop_factor loops."""
+    angles = np.linspace(0, loop_factor * 2 * np.pi, int(loop_factor * n_points), endpoint=False)
     pts = []
     for a in angles:
         pts.append(np.array([
@@ -70,15 +71,15 @@ def generate_circle(center_x, center_y, z_floor, radius=0.04, n_points=120):
             center_y + radius * np.sin(a),
             z_floor
         ]))
-    pts.append(pts[0])          # close the shape
     return pts
 
 
-def generate_star(cx, cy, z, r_outer=0.05, r_inner=0.02, n_points=5, n_total=120):
+def generate_star(cx, cy, z, r_outer=0.02, r_inner=0.005, n_points=5, n_total=120, loop_factor=1.5):
     """
     Generate a dense star path by interpolating along each edge between
     alternating outer (tip) and inner (valley) vertices.
     n_total: approximate total number of points (distributed evenly across edges).
+    loop_factor: number of times to loop through the star.
     """
     # Build the sparse corner vertices (outer tip, inner valley, ...)
     corners = []
@@ -91,14 +92,15 @@ def generate_star(cx, cy, z, r_outer=0.05, r_inner=0.02, n_points=5, n_total=120
     pts_per_edge = max(2, n_total // n_edges)
  
     pts = []
-    for i in range(n_edges):
-        start = corners[i]
-        end   = corners[(i + 1) % n_edges]
-        # linspace from start→end, endpoint=False avoids duplicating the corner
-        for t in np.linspace(0, 1, pts_per_edge, endpoint=False):
-            pts.append(start + t * (end - start))
- 
-    pts.append(pts[0])  # close the path
+    for loop in range(int(loop_factor) + 1):  # for 1.5, do 1 full + half
+        for i in range(n_edges):
+            if loop == int(loop_factor) and i >= n_edges // 2:  # for half loop, stop at half
+                break
+            start = corners[i]
+            end   = corners[(i + 1) % n_edges]
+            # linspace from start→end, endpoint=False avoids duplicating the corner
+            for t in np.linspace(0, 1, pts_per_edge, endpoint=False):
+                pts.append(start + t * (end - start))
     return pts
 
 
@@ -219,9 +221,9 @@ class PupperArt(Node):
     RF_CENTER_Y = -0.09
 
     # Drawing parameters
-    CIRCLE_RADIUS   = 0.035   # m
-    STAR_R_OUTER    = 0.040   # m
-    STAR_R_INNER    = 0.016   # m
+    CIRCLE_RADIUS   = 0.01   # m
+    STAR_R_OUTER    = 0.03   # m
+    STAR_R_INNER    = 0.01   # m
     N_CIRCLE_PTS    = 150
     DRAW_FREQ       = 50.0    # Hz  (waypoint advance rate)
     CTRL_FREQ       = 200.0   # Hz  (PD / publish rate)
@@ -254,19 +256,12 @@ class PupperArt(Node):
         self.pids = [CascadedPID(dt=dt_pid) for _ in range(3)]
 
         # ── Drawing sequence ───────────────────────────────────────────────
-        cx, cy = self.RF_CENTER_X, self.RF_CENTER_Y
-        self.shapes = [
-            generate_circle(cx, cy, self.PEN_Z,
-                            radius=self.CIRCLE_RADIUS,
-                            n_points=self.N_CIRCLE_PTS),
-            generate_star(cx, cy, self.PEN_Z,
-                          r_outer=self.STAR_R_OUTER,
-                          r_inner=self.STAR_R_INNER),
-        ]
-        self.shape_names = ['circle', 'star']
+        self.current_shape = None
+        self.shape_name = None
+        self.current_wp_idx = 0
+        self.desired_positions = []
+        self.actual_positions = []
 
-        self.current_shape_idx = 0
-        self.current_wp_idx    = 0
         # stand_up: ramp all 4 legs to standing with increasing kp/kd
         # stand:    hold for 2 s, confirm stability
         # pen_down → draw → pen_up → done → standing_hold (until q)
@@ -275,6 +270,7 @@ class PupperArt(Node):
         self.RAMP_TICKS        = int(self.RAMP_UP_SECS * self.CTRL_FREQ)
         self.STAND_TICKS       = int(2.0 * self.CTRL_FREQ)
         self.PEN_DOWN_TICKS    = int(1.0 * self.CTRL_FREQ)
+        self.TRANSITION_TICKS  = int(1.0 * self.CTRL_FREQ)  # make transitions slow and smooth
 
         self.draw_wp_counter   = 0
 
@@ -288,16 +284,31 @@ class PupperArt(Node):
         self.get_logger().info(
             'PupperArt ready.\n'
             '  s = stand up\n'
-            '  d = start drawing  (only after standing)\n'
+            '  c = draw circle\n'
+            '  p = draw star\n'
             '  q = relax and quit\n'
         )
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Keypress input
-    # ──────────────────────────────────────────────────────────────────────
+    def _start_drawing(self, shape_name):
+        cx, cy = self.RF_CENTER_X, self.RF_CENTER_Y
+        if shape_name == 'circle':
+            self.current_shape = generate_circle(cx, cy, self.PEN_Z,
+                                                 radius=self.CIRCLE_RADIUS,
+                                                 n_points=self.N_CIRCLE_PTS)
+        elif shape_name == 'star':
+            self.current_shape = generate_star(cx, cy, self.PEN_Z,
+                                               r_outer=self.STAR_R_OUTER,
+                                               r_inner=self.STAR_R_INNER)
+        self.shape_name = shape_name
+        self.current_wp_idx = 0
+        self.desired_positions = []
+        self.actual_positions = []
+        self.phase = 'move_to_start'
+        self.phase_counter = 0
+        print(f'[DRAWING {shape_name.upper()}]', flush=True)
 
     def _key_loop(self):
-        print('\nControls:  s = stand   d = draw   q = relax + quit\n', flush=True)
+        print('\nControls:  s = stand   c = circle   p = star   q = relax + quit\n', flush=True)
         while rclpy.ok():
             key = input().strip().lower()
             if key == 's':
@@ -306,16 +317,21 @@ class PupperArt(Node):
                     self.phase_counter = 0
                     print('[STANDING UP]', flush=True)
                 else:
-                    print('[already standing or drawing — press d to draw]', flush=True)
-            elif key == 'd':
-                if self.phase == 'standing_hold':
-                    self.phase = 'pen_down'
-                    self.phase_counter = 0
-                    print('[DRAWING]', flush=True)
+                    print('[already standing or drawing]', flush=True)
+            elif key == 'c':
+                if self.phase in ['standing_hold', 'done']:
+                    self._start_drawing('circle')
                 elif self.phase == 'idle':
                     print('[press s to stand first]', flush=True)
                 else:
-                    print(f'[not ready to draw yet — phase: {self.phase}]', flush=True)
+                    print(f'[not ready — phase: {self.phase}]', flush=True)
+            elif key == 'p':
+                if self.phase in ['standing_hold', 'done']:
+                    self._start_drawing('star')
+                elif self.phase == 'idle':
+                    print('[press s to stand first]', flush=True)
+                else:
+                    print(f'[not ready — phase: {self.phase}]', flush=True)
             elif key == 'q':
                 print('[RELAXING AND QUITTING]', flush=True)
                 self.phase = 'relax_quit'
@@ -376,28 +392,49 @@ class PupperArt(Node):
     # ──────────────────────────────────────────────────────────────────────
 
     def _current_waypoint(self):
-        shape = self.shapes[self.current_shape_idx]
-        return shape[self.current_wp_idx]
+        return self.current_shape[self.current_wp_idx]
 
     def _advance_waypoint(self):
-        shape = self.shapes[self.current_shape_idx]
         self.current_wp_idx += 1
-        if self.current_wp_idx >= len(shape):
+        if self.current_wp_idx >= len(self.current_shape):
             # Finished this shape
-            self.get_logger().info(
-                f'Finished drawing {self.shape_names[self.current_shape_idx]}!')
-            self.current_shape_idx += 1
-            self.current_wp_idx = 0
-            if self.current_shape_idx >= len(self.shapes):
-                self.phase = 'done'
-            else:
-                self.phase = 'pen_up'
-                self.phase_counter = 0
-                self.get_logger().info(
-                    f'Starting {self.shape_names[self.current_shape_idx]}…')
+            self.get_logger().info(f'Finished drawing {self.shape_name}!')
+            self.phase = 'pen_up'
+            self.phase_counter = 0
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Control callback (200 Hz)
+    def _plot_trajectory(self):
+        if not self.desired_positions or not self.actual_positions:
+            return
+        desired = np.array(self.desired_positions)
+        actual = np.array(self.actual_positions)
+        
+        # RMSE
+        rmse = np.sqrt(np.mean((desired - actual)**2, axis=0))
+        print(f'RMSE for {self.shape_name}: X={rmse[0]:.4f}, Y={rmse[1]:.4f}, Z={rmse[2]:.4f}')
+        
+        # Plot desired vs actual
+        plt.figure(figsize=(10, 5))
+        
+        plt.subplot(1, 2, 1)
+        plt.plot(desired[:, 0], desired[:, 1], 'b-', label='Desired', linewidth=2)
+        plt.plot(actual[:, 0], actual[:, 1], 'r--', label='Actual', linewidth=1)
+        plt.title(f'{self.shape_name.capitalize()} Trajectory')
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.legend()
+        plt.axis('equal')
+        
+        plt.subplot(1, 2, 2)
+        plt.plot(desired[:, 2], 'b-', label='Desired Z')
+        plt.plot(actual[:, 2], 'r--', label='Actual Z')
+        plt.title(f'{self.shape_name.capitalize()} Z Position')
+        plt.xlabel('Time step')
+        plt.ylabel('Z')
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.savefig(f'{self.shape_name}_trajectory.png')
+        # plt.show()  # Removed to avoid blocking
     # ──────────────────────────────────────────────────────────────────────
 
     def _ctrl_cb(self):
@@ -456,11 +493,11 @@ class PupperArt(Node):
             if self.phase_counter >= self.STAND_TICKS:
                 self.phase = 'standing_hold'
                 self.phase_counter = 0
-                self.get_logger().info('Standing stable — press d to start drawing.')
+                self.get_logger().info('Standing stable — press c for circle or p for star.')
             return   # skip PID / publish below during hold
 
         elif self.phase == 'standing_hold':
-            # Hold standing pose indefinitely; waiting for 'd' or 'q'
+            # Hold standing pose indefinitely; waiting for 'c', 'p' or 'q'
             stand_cmd = np.concatenate([
                 self.STAND_ANGLES_RF_HOME,
                 self.STAND_ANGLES_LF,
@@ -470,39 +507,70 @@ class PupperArt(Node):
             self.cmd_pub.publish(Float64MultiArray(data=stand_cmd.tolist()))
             return
 
+        elif self.phase == 'move_to_start':
+            # Smoothly move the pen to the shape start position at pen-up height
+            first_wp = self._current_waypoint()
+            start_target = np.array([first_wp[0], first_wp[1], self.PEN_UP_Z])
+            current_ee = self._rf_fk(rf_pos)
+            alpha = min(1.0, self.phase_counter / self.TRANSITION_TICKS)
+            target_rf_ee = current_ee + alpha * (start_target - current_ee)
+            self.target_rf = self._rf_ik(target_rf_ee, initial_guess=list(rf_pos))
+            self.phase_counter += 1
+            if self.phase_counter >= self.TRANSITION_TICKS:
+                self.phase = 'pen_down'
+                self.phase_counter = 0
+                self.get_logger().info('Lowering pen to start drawing…')
+
         elif self.phase == 'pen_down':
-            # Smoothly lower pen to drawing height
+            # Smoothly lower pen from pen-up height to drawing height while holding XY at start
+            first_wp = self._current_waypoint()
             alpha = min(1.0, self.phase_counter / self.PEN_DOWN_TICKS)
             target_z = self.PEN_UP_Z + alpha * (self.PEN_Z - self.PEN_UP_Z)
-            wp = self._current_waypoint()
-            target_rf_ee = np.array([wp[0], wp[1], target_z])
+            target_rf_ee = np.array([first_wp[0], first_wp[1], target_z])
             self.target_rf = self._rf_ik(target_rf_ee, initial_guess=list(rf_pos))
             self.phase_counter += 1
             if self.phase_counter >= self.PEN_DOWN_TICKS:
                 self.phase = 'draw'
                 self.draw_wp_counter = 0
                 self.get_logger().info(
-                    f'Drawing {self.shape_names[self.current_shape_idx]}…')
+                    f'Drawing {self.shape_name}…')
 
         elif self.phase == 'draw':
             wp = self._current_waypoint()
             self.target_rf = self._rf_ik(wp, initial_guess=list(rf_pos))
+            self.desired_positions.append(wp)
+            self.actual_positions.append(self._rf_fk(rf_pos))
             self.draw_wp_counter += 1
             if self.draw_wp_counter >= CTRL_PER_WP:
                 self.draw_wp_counter = 0
                 self._advance_waypoint()
 
         elif self.phase == 'pen_up':
-            # Lift pen, then go to start of next shape
-            alpha = min(1.0, self.phase_counter / self.PEN_DOWN_TICKS)
-            target_z = self.PEN_Z + alpha * (self.PEN_UP_Z - self.PEN_Z)
-            next_wp = self._current_waypoint()
-            target_rf_ee = np.array([next_wp[0], next_wp[1], target_z])
+            # Smoothly lift the pen vertically at the final drawing XY position
+            current_ee = self._rf_fk(rf_pos)
+            target_lift = np.array([current_ee[0], current_ee[1], self.PEN_UP_Z])
+            alpha = min(1.0, self.phase_counter / self.TRANSITION_TICKS)
+            target_rf_ee = current_ee + alpha * (target_lift - current_ee)
             self.target_rf = self._rf_ik(target_rf_ee, initial_guess=list(rf_pos))
             self.phase_counter += 1
-            if self.phase_counter >= self.PEN_DOWN_TICKS:
-                self.phase = 'pen_down'
+            if self.phase_counter >= self.TRANSITION_TICKS:
+                self.phase = 'return_home'
                 self.phase_counter = 0
+                self.get_logger().info('Pen lifted — returning smoothly to home position…')
+
+        elif self.phase == 'return_home':
+            # Smoothly move the pen home at the raised pen-up height
+            current_ee = self._rf_fk(rf_pos)
+            target_center = np.array([self.RF_CENTER_X, self.RF_CENTER_Y, self.PEN_UP_Z])
+            alpha = min(1.0, self.phase_counter / self.TRANSITION_TICKS)
+            target_rf_ee = current_ee + alpha * (target_center - current_ee)
+            self.target_rf = self._rf_ik(target_rf_ee, initial_guess=list(rf_pos))
+            self.phase_counter += 1
+            if self.phase_counter >= self.TRANSITION_TICKS:
+                self.phase = 'standing_hold'
+                self.phase_counter = 0
+                self._plot_trajectory()
+                self.get_logger().info('Ready for next command — press c for circle or p for star.')
 
         elif self.phase == 'done':
             # Raise pen back to home, hold briefly, then return to standing_hold
@@ -546,10 +614,9 @@ class PupperArt(Node):
 
         # ── Logging (throttled) ───────────────────────────────────────────
         if self.phase == 'draw':
-            shape_name  = self.shape_names[self.current_shape_idx]
-            n_wps       = len(self.shapes[self.current_shape_idx])
+            n_wps = len(self.current_shape)
             self.get_logger().info(
-                f'[{shape_name}] wp {self.current_wp_idx}/{n_wps} | '
+                f'[{self.shape_name}] wp {self.current_wp_idx}/{n_wps} | '
                 f'RF target: {self.target_rf} | '
                 f'RF actual: {rf_pos} | '
                 f'EE target: {self._rf_fk(self.target_rf)} | '
