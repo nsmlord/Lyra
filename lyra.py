@@ -105,6 +105,149 @@ def generate_star(cx, cy, z, r_outer=0.02, r_inner=0.005, n_points=5, n_total=12
 
 
 # ──────────────────────────────────────────────
+# Custom path drawing window
+# ──────────────────────────────────────────────
+
+def capture_custom_path(center_x, center_y, z_floor,
+                        workspace_radius=0.05, n_interp=200):
+    """
+    Opens an interactive matplotlib window for drawing a custom path.
+
+    The canvas is centred on (center_x, center_y) and the grey circle shows
+    the approximate reachable workspace of the RF leg.
+
+    Controls:
+      Left-click  — add a waypoint
+      Right-click — finish and confirm the path
+      Middle-click / 'u' key — undo the last point
+      Close window without right-clicking — cancels (returns None)
+
+    Returns a list of np.array([x, y, z]) waypoints interpolated to n_interp
+    points, or None if cancelled.
+    """
+    # Shared state between callbacks
+    state = {'points': [], 'confirmed': False, 'cancelled': False}
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    fig.canvas.manager.set_window_title('Lyra — Draw Custom Path')
+
+    # Workspace boundary
+    boundary = plt.Circle((center_x, center_y), workspace_radius,
+                           color='#cccccc', fill=False, linestyle='--', linewidth=1.5)
+    ax.add_patch(boundary)
+    ax.plot(center_x, center_y, '+', color='#999999', markersize=12)
+
+    ax.set_xlim(center_x - workspace_radius * 1.3, center_x + workspace_radius * 1.3)
+    ax.set_ylim(center_y - workspace_radius * 1.3, center_y + workspace_radius * 1.3)
+    ax.set_aspect('equal')
+    ax.set_xlabel('X (m, robot body frame)')
+    ax.set_ylabel('Y (m, robot body frame)')
+    ax.set_title(
+        'Left-click: add point   Right-click: confirm   U: undo\n'
+        'Draw a single connected path — no gaps or jumps.',
+        fontsize=9
+    )
+
+    # Live plot objects
+    path_line, = ax.plot([], [], 'b-o', linewidth=2, markersize=5, zorder=3)
+    start_dot, = ax.plot([], [], 'go', markersize=10, zorder=4, label='start')
+    end_dot,   = ax.plot([], [], 'rs', markersize=10, zorder=4, label='end')
+    status_text = ax.text(
+        0.01, 0.01, 'No points yet.',
+        transform=ax.transAxes, fontsize=8, color='#444444',
+        verticalalignment='bottom'
+    )
+
+    def _redraw():
+        pts = state['points']
+        if len(pts) == 0:
+            path_line.set_data([], [])
+            start_dot.set_data([], [])
+            end_dot.set_data([], [])
+            status_text.set_text('No points yet.')
+        else:
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            path_line.set_data(xs, ys)
+            start_dot.set_data([xs[0]], [ys[0]])
+            end_dot.set_data([xs[-1]], [ys[-1]])
+            status_text.set_text(f'{len(pts)} point(s).  Right-click to confirm.')
+        fig.canvas.draw_idle()
+
+    def _on_click(event):
+        if event.inaxes != ax:
+            return
+        if event.button == 1:   # left-click: add point
+            x, y = event.xdata, event.ydata
+            # Clamp to workspace circle
+            dx, dy = x - center_x, y - center_y
+            dist = np.hypot(dx, dy)
+            if dist > workspace_radius:
+                scale = workspace_radius / dist
+                x = center_x + dx * scale
+                y = center_y + dy * scale
+            state['points'].append((x, y))
+            _redraw()
+        elif event.button == 3:  # right-click: confirm
+            if len(state['points']) >= 2:
+                state['confirmed'] = True
+                plt.close(fig)
+            else:
+                status_text.set_text('Need at least 2 points!')
+                fig.canvas.draw_idle()
+        elif event.button == 2:  # middle-click: undo
+            if state['points']:
+                state['points'].pop()
+                _redraw()
+
+    def _on_key(event):
+        if event.key in ('u', 'U', 'backspace'):
+            if state['points']:
+                state['points'].pop()
+                _redraw()
+
+    def _on_close(event):
+        if not state['confirmed']:
+            state['cancelled'] = True
+
+    fig.canvas.mpl_connect('button_press_event', _on_click)
+    fig.canvas.mpl_connect('key_press_event', _on_key)
+    fig.canvas.mpl_connect('close_event', _on_close)
+
+    plt.tight_layout()
+    plt.show(block=True)   # blocks until the window is closed
+
+    if state['cancelled'] or not state['confirmed'] or len(state['points']) < 2:
+        print('[custom path] Cancelled or too few points — aborting.', flush=True)
+        return None
+
+    # ── Interpolate the clicked points to n_interp evenly-spaced waypoints ──
+    raw = np.array(state['points'])   # shape (N, 2)
+
+    # Compute cumulative arc length along the raw path
+    diffs = np.diff(raw, axis=0)
+    seg_lengths = np.hypot(diffs[:, 0], diffs[:, 1])
+    cum_len = np.concatenate([[0.0], np.cumsum(seg_lengths)])
+    total_len = cum_len[-1]
+
+    if total_len < 1e-6:
+        print('[custom path] Path is too short — aborting.', flush=True)
+        return None
+
+    # Uniform re-parameterisation
+    t_uniform = np.linspace(0, total_len, n_interp)
+    x_interp = np.interp(t_uniform, cum_len, raw[:, 0])
+    y_interp = np.interp(t_uniform, cum_len, raw[:, 1])
+
+    waypoints = [np.array([x_interp[i], y_interp[i], z_floor])
+                 for i in range(n_interp)]
+
+    print(f'[custom path] {len(waypoints)} waypoints generated '
+          f'(total path length ≈ {total_len*100:.1f} cm).', flush=True)
+    return waypoints
+
+
+# ──────────────────────────────────────────────
 # Cascaded PID controller (per-joint, 3 joints)
 # ──────────────────────────────────────────────
 
@@ -286,10 +429,11 @@ class PupperArt(Node):
             '  s = stand up\n'
             '  c = draw circle\n'
             '  p = draw star\n'
+            '  d = draw custom path (opens interactive window)\n'
             '  q = relax and quit\n'
         )
 
-    def _start_drawing(self, shape_name):
+    def _start_drawing(self, shape_name, custom_waypoints=None):
         cx, cy = self.RF_CENTER_X, self.RF_CENTER_Y
         if shape_name == 'circle':
             self.current_shape = generate_circle(cx, cy, self.PEN_Z,
@@ -299,6 +443,11 @@ class PupperArt(Node):
             self.current_shape = generate_star(cx, cy, self.PEN_Z,
                                                r_outer=self.STAR_R_OUTER,
                                                r_inner=self.STAR_R_INNER)
+        elif shape_name == 'custom':
+            if custom_waypoints is None or len(custom_waypoints) < 2:
+                print('[custom] No valid waypoints — aborting.', flush=True)
+                return
+            self.current_shape = custom_waypoints
         self.shape_name = shape_name
         self.current_wp_idx = 0
         self.desired_positions = []
@@ -308,7 +457,7 @@ class PupperArt(Node):
         print(f'[DRAWING {shape_name.upper()}]', flush=True)
 
     def _key_loop(self):
-        print('\nControls:  s = stand   c = circle   p = star   q = relax + quit\n', flush=True)
+        print('\nControls:  s = stand   c = circle   p = star   d = draw custom   q = relax + quit\n', flush=True)
         while rclpy.ok():
             key = input().strip().lower()
             if key == 's':
@@ -328,6 +477,30 @@ class PupperArt(Node):
             elif key == 'p':
                 if self.phase in ['standing_hold', 'done']:
                     self._start_drawing('star')
+                elif self.phase == 'idle':
+                    print('[press s to stand first]', flush=True)
+                else:
+                    print(f'[not ready — phase: {self.phase}]', flush=True)
+            elif key == 'd':
+                if self.phase in ['standing_hold', 'done']:
+                    print(
+                        '[CUSTOM PATH] Opening drawing window…\n'
+                        '  Left-click to add points, right-click to confirm, U to undo.\n'
+                        '  Draw a single connected path — no gaps or jumps.\n'
+                        '  The dashed circle shows the RF leg workspace boundary.',
+                        flush=True
+                    )
+                    waypoints = capture_custom_path(
+                        center_x=self.RF_CENTER_X,
+                        center_y=self.RF_CENTER_Y,
+                        z_floor=self.PEN_Z,
+                        workspace_radius=max(self.STAR_R_OUTER * 1.5, 0.04),
+                        n_interp=200,
+                    )
+                    if waypoints is not None:
+                        self._start_drawing('custom', custom_waypoints=waypoints)
+                    else:
+                        print('[custom path cancelled — still in standing_hold]', flush=True)
                 elif self.phase == 'idle':
                     print('[press s to stand first]', flush=True)
                 else:
@@ -493,7 +666,7 @@ class PupperArt(Node):
             if self.phase_counter >= self.STAND_TICKS:
                 self.phase = 'standing_hold'
                 self.phase_counter = 0
-                self.get_logger().info('Standing stable — press c for circle or p for star.')
+                self.get_logger().info('Standing stable — press c for circle, p for star, or d for custom.')
             return   # skip PID / publish below during hold
 
         elif self.phase == 'standing_hold':
@@ -570,7 +743,7 @@ class PupperArt(Node):
                 self.phase = 'standing_hold'
                 self.phase_counter = 0
                 self._plot_trajectory()
-                self.get_logger().info('Ready for next command — press c for circle or p for star.')
+                self.get_logger().info('Ready for next command — press c for circle, p for star, or d for custom.')
 
         elif self.phase == 'done':
             # Raise pen back to home, hold briefly, then return to standing_hold
