@@ -1,17 +1,4 @@
-"""
-sample_standing_pose.py
-=======================
-Run this WHILE the ROS stack is already up (controllers active).
-Physically hold the Pupper in its desired standing pose, then press Enter.
-Prints the exact joint angles to copy into pupper_art.py.
-
-Usage:
-  # Terminal 1 (already running):
-  ros2 launch pupper_art.launch.py
-
-  # Terminal 2:
-  python3 sample_standing_pose.py
-"""
+   
 
 import rclpy
 from rclpy.node import Node
@@ -54,7 +41,7 @@ def main():
     print("=" * 60)
     input("\nPress ENTER to sample the current joint positions...")
 
-    # Flush a few callbacks to get a fresh reading
+                                                  
     for _ in range(20):
         rclpy.spin_once(node, timeout_sec=0.05)
 

@@ -1,6 +1,6 @@
-# pupper_art_sim.launch.py
-# Simulation-only launch: fake plant + art state machine + RViz.
-# No real robot, no controller_manager, no hardware interface needed.
+                          
+                                                                
+                                                                     
 
 from launch import LaunchDescription
 from launch.substitutions import Command, FindExecutable, PathJoinSubstitution
@@ -10,7 +10,7 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
 
-    # ── Robot description (same URDF, used only for RViz visualisation) ───
+                                                                            
     robot_description_content = Command(
         [
             PathJoinSubstitution([FindExecutable(name="xacro")]),
@@ -26,7 +26,7 @@ def generate_launch_description():
     )
     robot_description = {"robot_description": robot_description_content}
 
-    # ── robot_state_publisher (converts joint_states → TF for RViz) ───────
+                                                                            
     robot_state_pub_node = Node(
         package="robot_state_publisher",
         executable="robot_state_publisher",
@@ -34,16 +34,16 @@ def generate_launch_description():
         parameters=[robot_description],
     )
 
-    # ── Simulation node (fake plant + full PupperArt state machine) ────────
-    # This publishes /joint_states and /marker so RViz sees everything.
-    # Replace 'pupper_art' with your actual ROS 2 package name if needed.
+                                                                             
+                                                                       
+                                                                         
     pupper_art_sim_node = Node(
         package="pupper_art",
-        executable="pupper_art_sim",    # entry point defined in setup.py
+        executable="pupper_art_sim",                                     
         output="both",
     )
 
-    # ── RViz with your existing lab_2 config ───────────────────────────────
+                                                                             
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",

@@ -1,6 +1,6 @@
-# pupper_art.launch.py
-# Brings up ONLY the ROS 2 control stack — no drawing node.
-# Run pupper_art.py or sample_standing_pose.py manually in a separate terminal.
+                      
+                                                           
+                                                                               
 
 import os
 from launch import LaunchDescription
@@ -50,7 +50,7 @@ def generate_launch_description():
                    "--controller-manager-timeout", "30"],
     )
 
-    # forward_command_controller starts after joint_state_broadcaster is ready
+                                                                              
     delay_fcc = RegisterEventHandler(
         event_handler=OnProcessExit(
             target_action=joint_state_broadcaster_spawner,
@@ -64,5 +64,5 @@ def generate_launch_description():
         joint_state_broadcaster_spawner,
         imu_sensor_broadcaster_spawner,
         delay_fcc,
-        # ── NO pupper_art node here — run it manually ──
+                                                         
     ])

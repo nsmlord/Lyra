@@ -1,12 +1,12 @@
-# pupper_art.launch.py  —  fixed for /home/pi/Lyra standalone deployment
-#
-# Fixes applied vs previous version:
-#   1. YAML path: uses absolute /home/pi/Lyra/lab_3.yaml instead of
-#      ThisLaunchFileDir() which resolved incorrectly.
-#   2. pupper_art node: launched as ExecuteProcess (plain Python script)
-#      instead of Node(package="pupper_art") — that package is not installed.
-#   3. Delay chain: pupper_art waits for forward_command_controller spawner
-#      to finish (controller is live) before starting.
+                                                                        
+ 
+                                    
+                                                                   
+                                                      
+                                                                        
+                                                                             
+                                                                           
+                                                      
 
 import os
 from launch import LaunchDescription
@@ -16,7 +16,7 @@ from launch.substitutions import Command, FindExecutable, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-LYRA_DIR = '/home/pi/Lyra'   # <-- adjust if your scripts live elsewhere
+LYRA_DIR = '/home/pi/Lyra'                                              
 
 def generate_launch_description():
 
@@ -31,7 +31,7 @@ def generate_launch_description():
     )
     robot_description = {"robot_description": robot_description_content}
 
-    # FIX 1: absolute path string — no more ThisLaunchFileDir() guessing
+                                                                        
     yaml_path = os.path.join(LYRA_DIR, 'lab_3.yaml')
 
     control_node = Node(
@@ -69,14 +69,14 @@ def generate_launch_description():
                    "--controller-manager-timeout", "30"],
     )
 
-    # FIX 2: ExecuteProcess instead of Node(package="pupper_art")
+                                                                 
     pupper_art_process = ExecuteProcess(
         cmd=["python3", os.path.join(LYRA_DIR, "pupper_art.py")],
         cwd=LYRA_DIR,
         output="both",
     )
 
-    # FIX 3: correct delay chain
+                                
     delay_fcc_after_jsb = RegisterEventHandler(
         event_handler=OnProcessExit(
             target_action=joint_state_broadcaster_spawner,

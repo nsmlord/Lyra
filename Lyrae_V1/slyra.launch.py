@@ -1,7 +1,7 @@
-# pupper_art.launch.py
-# Brings up the full control stack — position + kp + kd controllers.
-# kp/kd controllers enable true limp mode (set gains to 0 = zero torque).
-# Run pupper_art.py or sample_standing_pose.py manually in a separate terminal.
+                      
+                                                                    
+                                                                         
+                                                                               
 
 import os
 from launch import LaunchDescription
@@ -11,7 +11,7 @@ from launch.substitutions import Command, FindExecutable, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-LYRA_DIR = '/home/pi/Lyra/Lyrae_V1'   # adjust if needed
+LYRA_DIR = '/home/pi/Lyra/Lyrae_V1'                     
 
 def generate_launch_description():
     robot_description_content = Command([
@@ -23,15 +23,15 @@ def generate_launch_description():
     ])
     robot_description = {"robot_description": robot_description_content}
 
-    # lab_3.yaml defines forward_command_controller (position interface)
-    # lab_2.yaml defines forward_kp_controller and forward_kd_controller
+                                                                        
+                                                                        
     lab3_yaml = os.path.join(LYRA_DIR, 'lab_3.yaml')
     lab2_yaml = os.path.join(LYRA_DIR, 'lab_2.yaml')
 
     control_node = Node(
         package="controller_manager",
         executable="ros2_control_node",
-        # Load both YAMLs — controller_manager merges them
+                                                          
         parameters=[robot_description, lab3_yaml, lab2_yaml],
         output="both",
     )
@@ -42,7 +42,7 @@ def generate_launch_description():
         parameters=[robot_description],
     )
 
-    # ── Spawners ───────────────────────────────────────────────────────────
+                                                                             
     joint_state_broadcaster_spawner = Node(
         package="controller_manager", executable="spawner",
         arguments=["joint_state_broadcaster",
@@ -55,14 +55,14 @@ def generate_launch_description():
                    "--controller-manager", "/controller_manager",
                    "--controller-manager-timeout", "30"],
     )
-    # Position controller — used by pupper_art.py for drawing
+                                                             
     forward_command_controller_spawner = Node(
         package="controller_manager", executable="spawner",
         arguments=["forward_command_controller",
                    "--controller-manager", "/controller_manager",
                    "--controller-manager-timeout", "30"],
     )
-    # Gain controllers — used by sample_standing_pose.py for limp mode
+                                                                      
     forward_kp_controller_spawner = Node(
         package="controller_manager", executable="spawner",
         arguments=["forward_kp_controller",
@@ -76,8 +76,8 @@ def generate_launch_description():
                    "--controller-manager-timeout", "30"],
     )
 
-    # ── Delay chain ────────────────────────────────────────────────────────
-    # joint_state_broadcaster up → spawn position + kp + kd controllers
+                                                                             
+                                                                       
     delay_after_jsb = RegisterEventHandler(
         event_handler=OnProcessExit(
             target_action=joint_state_broadcaster_spawner,

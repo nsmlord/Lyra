@@ -1,20 +1,4 @@
-"""
-sample_standing_pose.py
-=======================
-Two modes — pick when prompted:
-
-  [r] RELAX  — publishes zero commands so servos go limp.
-               Physically arrange the 3 standing legs, then press Enter to sample.
-
-  [s] SAMPLE — just samples current joint positions without relaxing first.
-               Use this if the robot is already in the right pose.
-
-Requires the ROS stack to be running:
-  Terminal 1:  ros2 launch pupper_art.launch.py
-  Terminal 2:  python3 sample_standing_pose.py
-
-Output: exact numpy lines to paste into pupper_art.py
-"""
+   
 
 import sys
 import rclpy
@@ -47,10 +31,10 @@ class PoseSampler(Node):
             pass
 
     def relax(self):
-        """Send zeros — servos go limp so you can move the legs by hand."""
+                                                                           
         msg = Float64MultiArray()
         msg.data = [0.0] * 12
-        # Publish several times to make sure it lands
+                                                     
         for _ in range(50):
             self.cmd_pub.publish(msg)
             rclpy.spin_once(self, timeout_sec=0.02)
@@ -108,7 +92,7 @@ def main():
         pos = node.sample()
         print_results(pos)
 
-        # Optional: take 3 more samples to check stability
+                                                          
         print("\n── Stability check (3 more samples) ────────────────────")
         readings = [pos]
         for i in range(3):

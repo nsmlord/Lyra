@@ -1,21 +1,4 @@
-"""
-sample_standing_pose.py
-=======================
-Requires the updated pupper_art.launch.py (which spawns kp + kd controllers).
-
-  [r] RELAX  — sets kp=0, kd=0 → true zero-torque limp mode
-               arrange the 3 standing legs by hand, then press Enter to sample
-
-  [s] SAMPLE — reads current joint positions without changing anything
-
-  [t] TIGHTEN — restores reasonable kp/kd so the robot holds position again
-                (useful after relaxing if you want to test the standing pose
-                 before running pupper_art.py)
-
-Usage:
-  Terminal 1:  ros2 launch pupper_art.launch.py
-  Terminal 2:  python3 sample_standing_pose.py
-"""
+   
 
 import rclpy
 from rclpy.node import Node
@@ -30,8 +13,8 @@ JOINTS = [
     'leg_back_l_1',  'leg_back_l_2',  'leg_back_l_3',
 ]
 
-# Reasonable standing gains to restore after relaxing
-# (same values the Pupper uses in normal operation — adjust if needed)
+                                                     
+                                                                      
 DEFAULT_KP = 5.0
 DEFAULT_KD = 0.1
 
@@ -125,7 +108,7 @@ def main():
             pos = node.sample()
             print_results(pos)
 
-            # Stability check
+                             
             print("\n── Stability check (3 more samples) ────────────────────")
             readings = [pos]
             for i in range(3):

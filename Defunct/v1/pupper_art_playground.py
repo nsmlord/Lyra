@@ -1,19 +1,4 @@
-"""
-pupper_art_playground.py
-========================
-Offline verification — no ROS required.
-
-Generates:
-  planned_paths.png          — circle & star floor-plane paths
-  ik_accuracy.png            — planned vs IK-achieved EE for both shapes
-  pid_simulation_circle.png  — cascaded PID tracking, all 3 joints, circle
-  pid_simulation_star.png    — cascaded PID tracking, all 3 joints, star
-  pid_ee_circle.png          — EE path: IK target vs PID output, circle
-  pid_ee_star.png            — EE path: IK target vs PID output, star
-  full_sequence_ee.png       — full circle-then-star PID EE path
-
-Run:  python3 pupper_art_playground.py
-"""
+   
 
 import numpy as np
 import scipy.optimize
@@ -22,9 +7,9 @@ from matplotlib import pyplot as plt
 np.set_printoptions(precision=4, suppress=True)
 
 
-# ──────────────────────────────────────────────
-# Transforms
-# ──────────────────────────────────────────────
+                                                
+            
+                                                
 
 def rotation_x(a):
     c, s = np.cos(a), np.sin(a)
@@ -42,9 +27,9 @@ def translation(x, y, z):
     return np.array([[1,0,0,x],[0,1,0,y],[0,0,1,z],[0,0,0,1]], dtype=float)
 
 
-# ──────────────────────────────────────────────
-# RF leg FK / IK
-# ──────────────────────────────────────────────
+                                                
+                
+                                                
 
 def rf_fk(theta):
     T01 = translation(0.07500, -0.08350, 0) @ rotation_x(1.57080) @ rotation_z(theta[0])
@@ -66,9 +51,9 @@ def rf_ik(target_ee, initial_guess=None):
     return result.x
 
 
-# ──────────────────────────────────────────────
-# Shape generators
-# ──────────────────────────────────────────────
+                                                
+                  
+                                                
 
 def generate_circle(cx, cy, z, radius=0.035, n=120):
     angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
@@ -77,37 +62,33 @@ def generate_circle(cx, cy, z, radius=0.035, n=120):
     return pts
 
 def generate_star(cx, cy, z, r_outer=0.05, r_inner=0.02, n_points=5, n_total=120):
-    """
-    Generate a dense star path by interpolating along each edge between
-    alternating outer (tip) and inner (valley) vertices.
-    n_total: approximate total number of points (distributed evenly across edges).
-    """
-    # Build the sparse corner vertices (outer tip, inner valley, ...)
+           
+                                                                     
     corners = []
     for i in range(2 * n_points):
         r = r_outer if (i % 2 == 0) else r_inner
         a = np.pi / 2 + i * np.pi / n_points
         corners.append(np.array([cx + r * np.cos(a), cy + r * np.sin(a), z]))
  
-    n_edges = len(corners)  # = 2 * n_points = 10
+    n_edges = len(corners)                       
     pts_per_edge = max(2, n_total // n_edges)
  
     pts = []
     for i in range(n_edges):
         start = corners[i]
         end   = corners[(i + 1) % n_edges]
-        # linspace from start→end, endpoint=False avoids duplicating the corner
+                                                                               
         for t in np.linspace(0, 1, pts_per_edge, endpoint=False):
             pts.append(start + t * (end - start))
  
-    pts.append(pts[0])  # close the path
+    pts.append(pts[0])                  
     return pts
 
 
 
-# ──────────────────────────────────────────────
-# Cascaded PID  (identical to pupper_art.py)
-# ──────────────────────────────────────────────
+                                                
+                                            
+                                                
 
 class CascadedPID:
     def __init__(self,
@@ -129,7 +110,7 @@ class CascadedPID:
     def update(self, desired_angle, current_angle, current_velocity):
         dt = self.dt
 
-        # Stage 1: position error → desired angular velocity
+                                                            
         pos_err = desired_angle - current_angle
         self._int_pos += pos_err * dt
         d_pos = (pos_err - self._prev_pos_err) / dt
@@ -138,7 +119,7 @@ class CascadedPID:
             self.kp_pos * pos_err + self.ki_pos * self._int_pos + self.kd_pos * d_pos,
             -self.max_vel, self.max_vel)
 
-        # Stage 2: velocity error → desired torque
+                                                  
         vel_err = desired_vel - current_velocity
         self._int_vel += vel_err * dt
         d_vel = (vel_err - self._prev_vel_err) / dt
@@ -147,7 +128,7 @@ class CascadedPID:
             self.kp_vel * vel_err + self.ki_vel * self._int_vel + self.kd_vel * d_vel,
             -self.max_trq, self.max_trq)
 
-        # Stage 3: torque → position delta command
+                                                  
         trq_err = desired_trq
         self._int_trq += trq_err * dt
         d_trq = (trq_err - self._prev_trq_err) / dt
@@ -158,9 +139,9 @@ class CascadedPID:
         return delta
 
 
-# ──────────────────────────────────────────────
-# Shared helpers
-# ──────────────────────────────────────────────
+                                                
+                
+                                                
 
 def solve_path_ik(pts, initial_guess=None):
     guess = list(initial_guess) if initial_guess is not None else [0.0, 0.65, -1.30]
@@ -176,10 +157,7 @@ def solve_path_ik(pts, initial_guess=None):
 
 
 def simulate_pid_all_joints(desired_thetas, dt=0.005):
-    """
-    Open-loop cascaded PID simulation for all 3 RF joints.
-    Plant model: position-controlled, 1-step lag.
-    """
+           
     pids = [CascadedPID(dt=dt) for _ in range(3)]
     n    = len(desired_thetas)
     sim  = np.zeros((n, 3))
@@ -197,9 +175,9 @@ def simulate_pid_all_joints(desired_thetas, dt=0.005):
     return sim
 
 
-# ──────────────────────────────────────────────
-# Main
-# ──────────────────────────────────────────────
+                                                
+      
+                                                
 
 def main():
     CX, CY, Z = 0.06, -0.09, -0.14
@@ -207,9 +185,9 @@ def main():
     circle_pts = generate_circle(CX, CY, Z)
     star_pts   = generate_star(CX, CY, Z)
 
-    # ══════════════════════════════════════════════════════════════════════
-    # 1. Planned floor-plane paths
-    # ══════════════════════════════════════════════════════════════════════
+                                                                            
+                                  
+                                                                            
     fig1, axes1 = plt.subplots(1, 2, figsize=(13, 5))
     for ax, pts, name in zip(axes1, [circle_pts, star_pts], ['Circle', 'Star']):
         xs = [p[0] for p in pts]
@@ -222,9 +200,9 @@ def main():
     plt.savefig('planned_paths.png', dpi=150)
     print('Saved planned_paths.png')
 
-    # ══════════════════════════════════════════════════════════════════════
-    # 2. IK accuracy — circle AND star
-    # ══════════════════════════════════════════════════════════════════════
+                                                                            
+                                      
+                                                                            
     print('\n── IK accuracy ──')
     results = {}
     for pts, name in [(circle_pts, 'circle'), (star_pts, 'star')]:
@@ -246,9 +224,9 @@ def main():
     plt.savefig('ik_accuracy.png', dpi=150)
     print('Saved ik_accuracy.png')
 
-    # ══════════════════════════════════════════════════════════════════════
-    # 3. Cascaded PID simulation — ALL 3 JOINTS, BOTH SHAPES
-    # ══════════════════════════════════════════════════════════════════════
+                                                                            
+                                                            
+                                                                            
     DT           = 0.005
     joint_labels = ['Joint 1 — abduction', 'Joint 2 — shoulder pitch', 'Joint 3 — knee']
     colors       = ['tab:blue', 'tab:orange', 'tab:green']
@@ -263,7 +241,7 @@ def main():
         print(f'  {name}: max joint tracking error = {max_err:.5f} rad '
               f'({max_err * 180/np.pi:.4f} deg)')
 
-        # per-joint angle plots
+                               
         fig3, axes3 = plt.subplots(3, 1, figsize=(11, 9), sharex=True)
         fig3.suptitle(f'Cascaded PID simulation — RF leg, {name} path', fontsize=13)
         for j, (ax, label, color) in enumerate(zip(axes3, joint_labels, colors)):
@@ -281,7 +259,7 @@ def main():
         plt.savefig(fname, dpi=150)
         print(f'  Saved {fname}')
 
-        # EE path reconstructed from PID-simulated joint angles
+                                                               
         pid_ees = np.array([rf_fk(th) for th in sim_thetas])
         fig4, ax4 = plt.subplots(figsize=(6, 6))
         ax4.plot(ees_ik[:, 0],  ees_ik[:, 1],  'b--', lw=2,   label='IK target EE')
@@ -294,9 +272,9 @@ def main():
         plt.savefig(fname2, dpi=150)
         print(f'  Saved {fname2}')
 
-    # ══════════════════════════════════════════════════════════════════════
-    # 4. Full drawing sequence — circle then star, stitched together
-    # ══════════════════════════════════════════════════════════════════════
+                                                                            
+                                                                    
+                                                                            
     all_pts          = circle_pts + star_pts
     all_thetas, _, _ = solve_path_ik(all_pts)
     all_sim          = simulate_pid_all_joints(all_thetas, dt=DT)

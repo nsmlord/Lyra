@@ -1,29 +1,4 @@
-"""
-pupper_art.py — Pupper V3 floor art drawing node
-=================================================
-Uses Inverse Kinematics + Cascaded PID (position → angular-velocity → torque)
-to move the RIGHT FRONT leg (pen tip) along pre-planned shapes on the floor.
-Left front and both rear legs remain in a fixed standing stance.
-
-Architecture
-------------
-  desired_ee_position
-       │
-       ▼
-  [Position PID]  → desired joint angular velocity
-       │
-       ▼
-  [Angular-velocity PID]  → desired torque increment
-       │
-       ▼
-  [Torque PID / integrator]  → final position command
-       │
-       ▼
-  /forward_command_controller/commands
-
-Shapes supported: circle, star (5-pointed)
-The node draws the circle first, pauses, then draws the star.
-"""
+   
 
 import rclpy
 from rclpy.node import Node
@@ -34,9 +9,9 @@ import scipy.optimize
 
 np.set_printoptions(precision=4, suppress=True)
 
-# ──────────────────────────────────────────────
-# Homogeneous transform helpers
-# ──────────────────────────────────────────────
+                                                
+                               
+                                                
 
 def rotation_x(a):
     c, s = np.cos(a), np.sin(a)
@@ -54,12 +29,12 @@ def translation(x, y, z):
     return np.array([[1,0,0,x],[0,1,0,y],[0,0,1,z],[0,0,0,1]], dtype=float)
 
 
-# ──────────────────────────────────────────────
-# Shape generators
-# ──────────────────────────────────────────────
+                                                
+                  
+                                                
 
 def generate_circle(center_x, center_y, z_floor, radius=0.04, n_points=120):
-    """Generate (x, y, z) waypoints for a circle in the floor plane."""
+                                                                       
     angles = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
     pts = []
     for a in angles:
@@ -68,16 +43,16 @@ def generate_circle(center_x, center_y, z_floor, radius=0.04, n_points=120):
             center_y + radius * np.sin(a),
             z_floor
         ]))
-    pts.append(pts[0])          # close the shape
+    pts.append(pts[0])                           
     return pts
 
 
 def generate_star(center_x, center_y, z_floor, r_outer=0.045, r_inner=0.018, n_points=5):
-    """Generate (x, y, z) waypoints for a 5-pointed star in the floor plane."""
+                                                                               
     pts = []
     for i in range(2 * n_points + 1):
         r = r_outer if (i % 2 == 0) else r_inner
-        angle = np.pi / 2 + i * np.pi / n_points   # start at top
+        angle = np.pi / 2 + i * np.pi / n_points                 
         pts.append(np.array([
             center_x + r * np.cos(angle),
             center_y + r * np.sin(angle),
@@ -86,20 +61,12 @@ def generate_star(center_x, center_y, z_floor, r_outer=0.045, r_inner=0.018, n_p
     return pts
 
 
-# ──────────────────────────────────────────────
-# Cascaded PID controller (per-joint, 3 joints)
-# ──────────────────────────────────────────────
+                                                
+                                               
+                                                
 
 class CascadedPID:
-    """
-    Three-stage cascaded PID for a single joint:
-      Stage 1: position error       → desired angular velocity
-      Stage 2: angular-velocity error → desired torque increment
-      Stage 3: torque error          → final torque / position command
-
-    In practice the robot accepts POSITION commands, so the output of stage 3
-    is added as a small delta to the current IK-computed joint angle.
-    """
+           
 
     def __init__(self,
                  kp_pos=1,  ki_pos=0.001, kd_pos=0.001,
@@ -122,12 +89,10 @@ class CascadedPID:
         self._prev_trq_err = 0.0
 
     def update(self, desired_angle: float, current_angle: float, current_velocity: float):
-        """
-        Returns a delta that should be ADDED to the IK-computed joint angle.
-        """
+                   
         dt = self.dt
 
-        # ── Stage 1: position PID → desired angular velocity ──────────────
+                                                                            
         pos_err = desired_angle - current_angle
         self._int_pos += pos_err * dt
         d_pos_err = (pos_err - self._prev_pos_err) / dt
@@ -138,7 +103,7 @@ class CascadedPID:
                        + self.kd_pos * d_pos_err)
         desired_vel = np.clip(desired_vel, -self.max_vel, self.max_vel)
 
-        # ── Stage 2: velocity PID → desired torque ─────────────────────────
+                                                                             
         vel_err = desired_vel - current_velocity
         self._int_vel += vel_err * dt
         d_vel_err = (vel_err - self._prev_vel_err) / dt
@@ -149,9 +114,9 @@ class CascadedPID:
                        + self.kd_vel * d_vel_err)
         desired_trq = np.clip(desired_trq, -self.max_trq, self.max_trq)
 
-        # ── Stage 3: torque PID → position delta ──────────────────────────
-        # We treat "torque error" as (desired_trq − 0) since we want to achieve
-        # the desired torque from rest (robot is position-controlled).
+                                                                            
+                                                                               
+                                                                      
         trq_err = desired_trq
         self._int_trq += trq_err * dt
         d_trq_err = (trq_err - self._prev_trq_err) / dt
@@ -165,61 +130,61 @@ class CascadedPID:
         return delta
 
 
-# ──────────────────────────────────────────────
-# Main ROS 2 node
-# ──────────────────────────────────────────────
+                                                
+                 
+                                                
 
 class PupperArt(Node):
 
-    # ── Standing angles for stationary legs (LF, RB, LB) ─────────────────
-    # These keep the body level while the RF leg draws.
-    # Obtained by running IK for each leg at its nominal stand position.
+                                                                           
+                                                       
+                                                                        
     STAND_ANGLES_LF = np.array([ 0.00,  0.65, -1.30])
     STAND_ANGLES_RB = np.array([ 0.00,  0.65, -1.30])
     STAND_ANGLES_LB = np.array([ 0.00,  0.65, -1.30])
 
-    # RF pen tip height while drawing (metres, in body frame, negative = down)
+                                                                              
     PEN_Z = -0.14
 
-    # RF "pen-up" height for transitions
+                                        
     PEN_UP_Z = -0.10
 
-    # RF leg centre position (body frame x-y)
+                                             
     RF_CENTER_X =  0.06
     RF_CENTER_Y = -0.09
 
-    # Drawing parameters
-    CIRCLE_RADIUS   = 0.035   # m
-    STAR_R_OUTER    = 0.040   # m
-    STAR_R_INNER    = 0.016   # m
+                        
+    CIRCLE_RADIUS   = 0.035      
+    STAR_R_OUTER    = 0.040      
+    STAR_R_INNER    = 0.016      
     N_CIRCLE_PTS    = 150
-    DRAW_FREQ       = 50.0    # Hz  (waypoint advance rate)
-    CTRL_FREQ       = 200.0   # Hz  (PD / publish rate)
+    DRAW_FREQ       = 50.0                                 
+    CTRL_FREQ       = 200.0                            
 
     def __init__(self):
         super().__init__('pupper_art')
 
-        # ── ROS interfaces ─────────────────────────────────────────────────
+                                                                             
         self.joint_sub = self.create_subscription(
             JointState, 'joint_states', self._joint_cb, 10)
         self.cmd_pub = self.create_publisher(
             Float64MultiArray, '/forward_command_controller/commands', 10)
 
-        # ── State ──────────────────────────────────────────────────────────
+                                                                             
         self.joint_positions  = None
         self.joint_velocities = None
 
-        # 12-element command array: [RF(3), LF(3), RB(3), LB(3)]
+                                                                
         self.cmd = np.zeros(12)
 
-        # IK-computed target for RF leg
-        self.target_rf = np.array(self.STAND_ANGLES_LF)  # init to stand
+                                       
+        self.target_rf = np.array(self.STAND_ANGLES_LF)                 
 
-        # Cascaded PIDs — one per RF joint
+                                          
         dt_pid = 1.0 / self.CTRL_FREQ
         self.pids = [CascadedPID(dt=dt_pid) for _ in range(3)]
 
-        # ── Drawing sequence ───────────────────────────────────────────────
+                                                                             
         cx, cy = self.RF_CENTER_X, self.RF_CENTER_Y
         self.shapes = [
             generate_circle(cx, cy, self.PEN_Z,
@@ -233,21 +198,21 @@ class PupperArt(Node):
 
         self.current_shape_idx = 0
         self.current_wp_idx    = 0
-        self.phase             = 'stand'   # stand → pen_down → draw → pen_up → done
+        self.phase             = 'stand'                                            
         self.phase_counter     = 0
-        self.STAND_TICKS       = int(2.0 * self.CTRL_FREQ)   # 2 s stand-still
-        self.PEN_DOWN_TICKS    = int(1.0 * self.CTRL_FREQ)   # 1 s lower pen
+        self.STAND_TICKS       = int(2.0 * self.CTRL_FREQ)                    
+        self.PEN_DOWN_TICKS    = int(1.0 * self.CTRL_FREQ)                  
 
-        self.draw_wp_counter   = 0         # counts ctrl ticks per waypoint hold
+        self.draw_wp_counter   = 0                                              
 
-        # ── Timers ─────────────────────────────────────────────────────────
+                                                                             
         self.ctrl_timer = self.create_timer(1.0 / self.CTRL_FREQ, self._ctrl_cb)
 
         self.get_logger().info('PupperArt node started — waiting for joint states …')
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Forward kinematics (RF leg only)
-    # ──────────────────────────────────────────────────────────────────────
+                                                                            
+                                      
+                                                                            
 
     @staticmethod
     def _rf_fk(theta):
@@ -257,9 +222,9 @@ class PupperArt(Node):
         T3e = translation(0.06231, -0.06216, 0.01800)
         return (T01 @ T12 @ T23 @ T3e)[:3, 3]
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Inverse kinematics (RF leg, numerical)
-    # ──────────────────────────────────────────────────────────────────────
+                                                                            
+                                            
+                                                                            
 
     def _rf_ik(self, target_ee: np.ndarray, initial_guess=None) -> np.ndarray:
         if initial_guess is None:
@@ -277,9 +242,9 @@ class PupperArt(Node):
         )
         return result.x
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Joint state callback
-    # ──────────────────────────────────────────────────────────────────────
+                                                                            
+                          
+                                                                            
 
     JOINT_ORDER = [
         'leg_front_r_1', 'leg_front_r_2', 'leg_front_r_3',
@@ -296,9 +261,9 @@ class PupperArt(Node):
         except ValueError as e:
             self.get_logger().warn(f'Joint name not found: {e}')
 
-    # ──────────────────────────────────────────────────────────────────────
-    # State-machine helpers
-    # ──────────────────────────────────────────────────────────────────────
+                                                                            
+                           
+                                                                            
 
     def _current_waypoint(self):
         shape = self.shapes[self.current_shape_idx]
@@ -308,7 +273,7 @@ class PupperArt(Node):
         shape = self.shapes[self.current_shape_idx]
         self.current_wp_idx += 1
         if self.current_wp_idx >= len(shape):
-            # Finished this shape
+                                 
             self.get_logger().info(
                 f'Finished drawing {self.shape_names[self.current_shape_idx]}!')
             self.current_shape_idx += 1
@@ -321,9 +286,9 @@ class PupperArt(Node):
                 self.get_logger().info(
                     f'Starting {self.shape_names[self.current_shape_idx]}…')
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Control callback (200 Hz)
-    # ──────────────────────────────────────────────────────────────────────
+                                                                            
+                               
+                                                                            
 
     def _ctrl_cb(self):
         if self.joint_positions is None:
@@ -335,11 +300,11 @@ class PupperArt(Node):
         rf_pos = pos[0:3]
         rf_vel = vel[0:3]
 
-        # ── State machine ──────────────────────────────────────────────────
+                                                                             
         CTRL_PER_WP = max(1, int(self.CTRL_FREQ / self.DRAW_FREQ))
 
         if self.phase == 'stand':
-            # Hold standing pose for STAND_TICKS
+                                                
             target_rf_ee = np.array([self.RF_CENTER_X,
                                      self.RF_CENTER_Y,
                                      self.PEN_UP_Z])
@@ -351,7 +316,7 @@ class PupperArt(Node):
                 self.get_logger().info('Standing stable — lowering pen…')
 
         elif self.phase == 'pen_down':
-            # Smoothly lower pen to drawing height
+                                                  
             alpha = min(1.0, self.phase_counter / self.PEN_DOWN_TICKS)
             target_z = self.PEN_UP_Z + alpha * (self.PEN_Z - self.PEN_UP_Z)
             wp = self._current_waypoint()
@@ -373,7 +338,7 @@ class PupperArt(Node):
                 self._advance_waypoint()
 
         elif self.phase == 'pen_up':
-            # Lift pen, then go to start of next shape
+                                                      
             alpha = min(1.0, self.phase_counter / self.PEN_DOWN_TICKS)
             target_z = self.PEN_Z + alpha * (self.PEN_UP_Z - self.PEN_Z)
             next_wp = self._current_waypoint()
@@ -385,20 +350,20 @@ class PupperArt(Node):
                 self.phase_counter = 0
 
         elif self.phase == 'done':
-            # Raise pen back to centre, hold briefly, then relax and exit
+                                                                         
             target_rf_ee = np.array([self.RF_CENTER_X,
                                      self.RF_CENTER_Y,
                                      self.PEN_UP_Z])
             self.target_rf = self._rf_ik(target_rf_ee, initial_guess=list(rf_pos))
             self.phase_counter += 1
-            if self.phase_counter >= int(1.0 * self.CTRL_FREQ):  # hold 1 s then exit
+            if self.phase_counter >= int(1.0 * self.CTRL_FREQ):                      
                 self.get_logger().info('Drawing complete — relaxing joints and exiting.')
                 zero = Float64MultiArray()
                 zero.data = [0.0] * 12
                 self.cmd_pub.publish(zero)
                 raise SystemExit
 
-        # ── Cascaded PID correction on RF joints ──────────────────────────
+                                                                            
         rf_cmd = np.zeros(3)
         for j in range(3):
             delta = self.pids[j].update(
@@ -408,18 +373,18 @@ class PupperArt(Node):
             )
             rf_cmd[j] = self.target_rf[j] + delta
 
-        # ── Stationary legs: pure IK hold (no cascaded PID needed) ────────
+                                                                            
         lf_cmd = self.STAND_ANGLES_LF
         rb_cmd = self.STAND_ANGLES_RB
         lb_cmd = self.STAND_ANGLES_LB
 
-        # ── Pack and publish [RF, LF, RB, LB] ─────────────────────────────
+                                                                            
         self.cmd = np.concatenate([rf_cmd, lf_cmd, rb_cmd, lb_cmd])
         msg = Float64MultiArray()
         msg.data = self.cmd.tolist()
         self.cmd_pub.publish(msg)
 
-        # ── Logging (throttled) ───────────────────────────────────────────
+                                                                            
         if self.phase == 'draw':
             shape_name  = self.shape_names[self.current_shape_idx]
             n_wps       = len(self.shapes[self.current_shape_idx])
@@ -433,9 +398,9 @@ class PupperArt(Node):
             )
 
 
-# ──────────────────────────────────────────────
-# Entry point
-# ──────────────────────────────────────────────
+                                                
+             
+                                                
 
 def main():
     rclpy.init()
@@ -445,7 +410,7 @@ def main():
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        # Always relax joints on exit — lets you move legs freely afterwards
+                                                                            
         zero = Float64MultiArray()
         zero.data = [0.0] * 12
         node.cmd_pub.publish(zero)

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 set_gains.py
 ------------
@@ -39,7 +39,7 @@ KD_STIFF = 0.1
 
 
 def getch():
-    """Read a single keypress without requiring Enter."""
+                                                         
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:
@@ -70,9 +70,9 @@ class GainPublisher(Node):
         self.create_subscription(
             JointState, '/joint_states', self._js_callback, 10)
 
-        self.create_timer(0.02, self._publish)  # 50 Hz
+        self.create_timer(0.02, self._publish)         
 
-    # ── joint state subscription ───────────────────────────────────────────
+                                                                             
 
     def _js_callback(self, msg: JointState):
         with self._js_lock:
@@ -86,7 +86,7 @@ class GainPublisher(Node):
             return None
         return [snapshot[j] for j in JOINTS]
 
-    # ── gain control ───────────────────────────────────────────────────────
+                                                                             
 
     def relax(self):
         with self._gain_lock:
@@ -94,21 +94,18 @@ class GainPublisher(Node):
             self._kd = 0.0
 
     def stiffen(self) -> bool:
-        """
-        Latch current measured positions as the position setpoint,
-        then raise gains. Returns False if joint states aren't available yet.
-        """
+                   
         positions = self._current_positions()
         if positions is None:
             return False
 
-        # 1. Send the position command FIRST while gains are still zero
+                                                                       
         self.pos_pub.publish(Float64MultiArray(data=positions))
 
-        # 2. Small sleep so the position command lands before gains go up
+                                                                         
         import time; time.sleep(0.05)
 
-        # 3. Now raise gains — controller targets the pose we just sent
+                                                                       
         with self._gain_lock:
             self._kp = KP_STIFF
             self._kd = KD_STIFF
@@ -121,7 +118,7 @@ class GainPublisher(Node):
         self.kp_pub.publish(Float64MultiArray(data=[kp] * N))
         self.kd_pub.publish(Float64MultiArray(data=[kd] * N))
 
-    # ── logging ────────────────────────────────────────────────────────────
+                                                                             
 
     def log_joint_states(self):
         positions = self._current_positions()
